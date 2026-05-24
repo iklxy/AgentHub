@@ -21,6 +21,7 @@ This project is AgentHub, a multi-agent collaboration platform whose core intera
 - Comments must be written in English and should be friendly for agents to understand.
 - Each file must include a file header with the date and author. The author is XinYang Li.
 - The front-end page uses Chinese.
+- The front-end pages use light colors and a minimalist style; UI elements that can be replaced with icons should not use text.
 
 ## Output Format
 

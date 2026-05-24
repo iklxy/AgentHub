@@ -1,3 +1,20 @@
-/otherfiles/
+# Date: 2026-05-25
+# Author: XinYang Li
+
+node_modules
+.next
+dist
+build
+coverage
+*.log
+logs/*.log
+logs/*.jsonl
 .env
-.codex
+.env.local
+frontend/.next
+frontend/node_modules
+backend/bin
+agent/.venv
+agent/__pycache__
+agent/.pytest_cache
+agent/.mypy_cache
