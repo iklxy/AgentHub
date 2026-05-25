@@ -3,9 +3,12 @@
 
 "use client";
 
+import { Bot, Sparkles } from "lucide-react";
+
 import type { AgentOption } from "@/types/domain";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { WorkspaceModalShell } from "@/components/workspace/workspace-modal-shell";
 
 /**
@@ -75,18 +78,44 @@ export function SessionCreateModal({
 
         <div className="space-y-2">
           <p className="text-sm font-semibold text-ink">选择 Agent</p>
-          <select
-            className="h-12 w-full rounded-3xl border border-line bg-white px-4 text-sm text-ink outline-none transition focus:border-pine/50 focus:ring-4 focus:ring-pine/10"
-            onChange={(event) => onAgentChange(event.target.value)}
-            value={primaryAgentId}
-          >
-            <option value="">请选择 Agent</option>
+          <div className="grid gap-3">
             {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
+              <button
+                className={cn(
+                  "rounded-[24px] border px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5",
+                  primaryAgentId === agent.id
+                    ? "border-pine/40 bg-pine/8 shadow-panel"
+                    : "border-line bg-white hover:border-pine/24 hover:bg-mist",
+                )}
+                key={agent.id}
+                onClick={() => onAgentChange(agent.id)}
+                type="button"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-pine/10 text-pine">
+                        <Bot className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-ink">{agent.name}</p>
+                        <p className="text-xs uppercase tracking-[0.16em] text-ink/42">{agent.kind}</p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-xs leading-6 text-ink/56">
+                      {agent.name === "Galaxy" ? "适合通用协作、任务推进与连续对话。" : "适合文档整理、改写、归纳与内容加工。"}
+                    </p>
+                  </div>
+                  {primaryAgentId === agent.id ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-pine/20 bg-pine/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-pine">
+                      <Sparkles className="h-3 w-3" />
+                      已选中
+                    </span>
+                  ) : null}
+                </div>
+              </button>
             ))}
-          </select>
+          </div>
           <p className="text-xs leading-6 text-ink/48">Galaxy 和 Aries 都可以作为单聊模式下的可选 Agent，由你主动创建新的会话。</p>
         </div>
 

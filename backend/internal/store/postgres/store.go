@@ -470,13 +470,15 @@ func (s *Store) ListSessions(userID string, taskID string) ([]domain.Session, er
 		    COALESCE(ts.runtime_session_key, ''),
 		    COALESCE(ts.created_from_session_id::text, ''),
 		    ts.started_at,
+		    ts.created_at,
 		    ts.last_active_at,
-		    COALESCE(ts.last_message_preview, '')
+		    COALESCE(ts.last_message_preview, ''),
+		    COALESCE(ts.is_pinned, false)
 		 FROM task_sessions ts
 		 INNER JOIN workspace_members wm ON wm.workspace_id = ts.workspace_id
 		 LEFT JOIN agents a ON a.id = ts.primary_agent_id
-		 WHERE wm.user_id = $1 AND ts.task_id = $2 AND ts.status = 'active'
-		 ORDER BY ts.last_active_at DESC, ts.created_at ASC`,
+		 WHERE wm.user_id = $1 AND ts.task_id = $2 AND ts.status = 'active' AND ts.archived_at IS NULL
+		 ORDER BY ts.is_pinned DESC, ts.last_active_at DESC, ts.created_at DESC`,
 		userID,
 		taskID,
 	)
@@ -519,12 +521,14 @@ func (s *Store) GetSession(userID string, sessionID string) (domain.Session, err
 		    COALESCE(ts.runtime_session_key, ''),
 		    COALESCE(ts.created_from_session_id::text, ''),
 		    ts.started_at,
+		    ts.created_at,
 		    ts.last_active_at,
-		    COALESCE(ts.last_message_preview, '')
+		    COALESCE(ts.last_message_preview, ''),
+		    COALESCE(ts.is_pinned, false)
 		 FROM task_sessions ts
 		 INNER JOIN workspace_members wm ON wm.workspace_id = ts.workspace_id
 		 LEFT JOIN agents a ON a.id = ts.primary_agent_id
-		 WHERE wm.user_id = $1 AND ts.id = $2
+		 WHERE wm.user_id = $1 AND ts.id = $2 AND ts.archived_at IS NULL
 		 LIMIT 1`,
 		userID,
 		sessionID,
@@ -606,7 +610,7 @@ func (s *Store) CreateSession(userID string, input domain.CreateSessionRequest) 
 }
 
 /**
- * UpdateSession updates the editable metadata of one session.
+ * UpdateSession updates editable metadata and list-management flags for one session.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
  * - sessionID: the session identifier from the request path.
@@ -619,17 +623,73 @@ func (s *Store) UpdateSession(userID string, sessionID string, input domain.Upda
 		return domain.Session{}, err
 	}
 
-	_, err = s.db.ExecContext(
-		ctx,
-		`UPDATE task_sessions
-		 SET title = $2, updated_at = $3
-		 WHERE id = $1`,
-		session.ID,
-		input.Title,
-		time.Now().UTC(),
-	)
-	if err != nil {
-		return domain.Session{}, err
+	nextTitle := session.Title
+	if input.Title != nil {
+		trimmedTitle := strings.TrimSpace(*input.Title)
+		if trimmedTitle != "" {
+			nextTitle = trimmedTitle
+		}
+	}
+
+	nextPinned := session.IsPinned
+	if input.IsPinned != nil {
+		nextPinned = *input.IsPinned
+	}
+
+	now := time.Now().UTC()
+
+	if input.IsArchived != nil {
+		var archivedAt any
+		if *input.IsArchived {
+			archivedAt = now
+		}
+
+		_, err = s.db.ExecContext(
+			ctx,
+			`UPDATE task_sessions
+			 SET title = $2, is_pinned = $3, archived_at = $4, updated_at = $5
+			 WHERE id = $1`,
+			session.ID,
+			nextTitle,
+			nextPinned,
+			archivedAt,
+			now,
+		)
+		if err != nil {
+			return domain.Session{}, err
+		}
+
+		if *input.IsArchived {
+			_, err = s.db.ExecContext(
+				ctx,
+				`UPDATE tasks
+				 SET current_session_id = CASE WHEN current_session_id = $2::uuid THEN NULL ELSE current_session_id END,
+				     current_primary_agent_id = CASE WHEN current_session_id = $2::uuid THEN NULL ELSE current_primary_agent_id END,
+				     updated_at = $3
+				 WHERE id = $1`,
+				session.TaskID,
+				session.ID,
+				now,
+			)
+			if err != nil {
+				return domain.Session{}, err
+			}
+			return domain.Session{}, nil
+		}
+	} else {
+		_, err = s.db.ExecContext(
+			ctx,
+			`UPDATE task_sessions
+			 SET title = $2, is_pinned = $3, updated_at = $4
+			 WHERE id = $1`,
+			session.ID,
+			nextTitle,
+			nextPinned,
+			now,
+		)
+		if err != nil {
+			return domain.Session{}, err
+		}
 	}
 
 	return s.GetSession(userID, sessionID)
@@ -856,6 +916,7 @@ func scanSession(scanner interface {
 }) (domain.Session, error) {
 	var session domain.Session
 	var startedAt sql.NullTime
+	var createdAt time.Time
 	var lastActiveAt time.Time
 
 	err := scanner.Scan(
@@ -870,8 +931,10 @@ func scanSession(scanner interface {
 		&session.RuntimeSessionKey,
 		&session.CreatedFromSession,
 		&startedAt,
+		&createdAt,
 		&lastActiveAt,
 		&session.LastMessagePreview,
+		&session.IsPinned,
 	)
 	if err != nil {
 		return domain.Session{}, err
@@ -880,6 +943,8 @@ func scanSession(scanner interface {
 	if startedAt.Valid {
 		session.StartedAt = startedAt.Time.UTC().Format(time.RFC3339)
 	}
+	session.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	session.CreatedAtLabel = formatRelativeTime(createdAt)
 	session.LastActiveAt = lastActiveAt.UTC().Format(time.RFC3339)
 	session.LastActiveAtLabel = formatRelativeTime(lastActiveAt)
 	return session, nil

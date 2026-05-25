@@ -40,9 +40,12 @@ export type Session = {
   runtimeSessionKey: string;
   createdFromSessionId: string;
   startedAt: string;
+  createdAt: string;
+  createdAtLabel: string;
   lastActiveAt: string;
   lastActiveAtLabel: string;
   lastMessagePreview: string;
+  isPinned: boolean;
 };
 
 export type AgentOption = {

@@ -35,7 +35,9 @@ type CreateSessionPayload = {
 };
 
 type UpdateSessionPayload = {
-  title: string;
+  title?: string;
+  isPinned?: boolean;
+  isArchived?: boolean;
 };
 
 type CreateMessagePayload = {

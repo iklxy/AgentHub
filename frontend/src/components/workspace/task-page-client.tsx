@@ -11,6 +11,8 @@ import { ChatColumn } from "@/components/workspace/chat-column";
 import { SessionCreateModal } from "@/components/workspace/session-create-modal";
 import { TaskSessionSidebar } from "@/components/workspace/task-session-sidebar";
 import { UserSettingsPanel } from "@/components/workspace/user-settings-panel";
+import { WorkspaceModalShell } from "@/components/workspace/workspace-modal-shell";
+import { Button } from "@/components/ui/button";
 import {
   createMessage,
   createSession,
@@ -21,9 +23,27 @@ import {
   getTask,
   getTasks,
   getWorkspace,
+  updateSession,
 } from "@/lib/api";
 import { clearStoredToken, getStoredToken } from "@/lib/auth";
 import type { AgentOption, Message, Session, Task, User, Workspace } from "@/types/domain";
+
+/**
+ * Sorts sessions for the left sidebar with pinned sessions first and recent activity second.
+ * @param items The session list that should be reordered for display.
+ * @returns The sorted session list copy.
+ */
+function sortSessions(items: Session[]): Session[] {
+  return [...items].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return left.isPinned ? -1 : 1;
+    }
+
+    const leftTime = new Date(left.lastActiveAt).getTime();
+    const rightTime = new Date(right.lastActiveAt).getTime();
+    return rightTime - leftTime;
+  });
+}
 
 /**
  * Renders the task workspace page backed by real API calls.
@@ -45,6 +65,8 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isCreateSessionOpen, setIsCreateSessionOpen] = useState(false);
   const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
+  const [pendingArchiveSession, setPendingArchiveSession] = useState<Session | null>(null);
+  const [searchKeyword, setSearchKeyword] = useState("");
   const [sessionDraft, setSessionDraft] = useState({
     title: "",
     chatMode: "single" as const,
@@ -75,7 +97,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
         setWorkspace(loadedWorkspace);
         setTasks(loadedTasks);
         setTask(loadedTask);
-        setSessions(loadedSessions);
+        setSessions(sortSessions(loadedSessions));
         setSessionAgents(loadedAgents);
 
         const initialSessionId = loadedTask.currentSessionId || loadedSessions[0]?.id || "";
@@ -103,6 +125,17 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
     });
   }, [activeSessionId, taskId, token]);
 
+  const filteredSessions = sessions.filter((session) => {
+    const keyword = searchKeyword.trim().toLowerCase();
+    if (!keyword) {
+      return true;
+    }
+
+    return (
+      session.title.toLowerCase().includes(keyword) ||
+      session.primaryAgentName.toLowerCase().includes(keyword)
+    );
+  });
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null;
 
   if (!token || !currentUser || !workspace || !task) {
@@ -120,15 +153,35 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
       <div className="grid h-full gap-6 xl:grid-cols-[320px_280px_1fr]">
         <TaskSessionSidebar
           activeSessionId={activeSession?.id ?? ""}
+          isUpdatingSession={isPending}
+          onArchiveSession={(sessionId) => {
+            const targetSession = sessions.find((item) => item.id === sessionId) ?? null;
+            setPendingArchiveSession(targetSession);
+          }}
           onCreateSession={() => setIsCreateSessionOpen(true)}
           onOpenSettings={() => setIsSettingsPanelOpen(true)}
+          onSearchChange={setSearchKeyword}
           onSelectSession={(sessionId) => {
             setErrorMessage("");
             setMessages([]);
             setActiveSessionId(sessionId);
           }}
-          sessions={sessions}
-          task={task}
+          onTogglePin={(sessionId, nextPinned) => {
+            setErrorMessage("");
+
+            startTransition(async () => {
+              try {
+                const updatedSession = await updateSession(token, sessionId, { isPinned: nextPinned });
+                setSessions((current) =>
+                  sortSessions(current.map((item) => (item.id === sessionId ? updatedSession : item))),
+                );
+              } catch (error) {
+                setErrorMessage(error instanceof Error ? error.message : "更新置顶状态失败");
+              }
+            });
+          }}
+          searchKeyword={searchKeyword}
+          sessions={filteredSessions}
           user={currentUser}
         />
 
@@ -183,15 +236,18 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                     ),
                   );
                   setSessions((current) =>
-                    current.map((item) =>
-                      item.id === activeSession.id
-                        ? {
-                            ...item,
-                            startedAt: item.startedAt || new Date().toISOString(),
-                            lastActiveAtLabel: "刚刚",
-                            lastMessagePreview: response.assistantMessage.content,
-                          }
-                        : item,
+                    sortSessions(
+                      current.map((item) =>
+                        item.id === activeSession.id
+                          ? {
+                              ...item,
+                              startedAt: item.startedAt || new Date().toISOString(),
+                              lastActiveAt: new Date().toISOString(),
+                              lastActiveAtLabel: "刚刚",
+                              lastMessagePreview: response.assistantMessage.content,
+                            }
+                          : item,
+                      ),
                     ),
                   );
                 } catch (error) {
@@ -239,7 +295,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                 primaryAgentId: sessionDraft.primaryAgentId,
               });
 
-              setSessions((current) => [createdSession, ...current]);
+              setSessions((current) => sortSessions([createdSession, ...current]));
               setSessionDraft({
                 title: "",
                 chatMode: "single",
@@ -267,6 +323,61 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
         }}
         user={currentUser}
       />
+
+      <WorkspaceModalShell
+        isOpen={pendingArchiveSession !== null}
+        onClose={() => setPendingArchiveSession(null)}
+        title="确认删除 Session"
+      >
+        <div className="space-y-5 px-6 py-6">
+          <p className="text-sm leading-7 text-ink/62">
+            {pendingArchiveSession
+              ? `删除后，这个会话会从当前列表移除。请确认是否删除「${pendingArchiveSession.title}」。`
+              : ""}
+          </p>
+
+          <div className="flex justify-end gap-3">
+            <Button onClick={() => setPendingArchiveSession(null)} type="button" variant="secondary">
+              取消
+            </Button>
+            <Button
+              disabled={isPending || pendingArchiveSession === null}
+              onClick={() => {
+                if (!pendingArchiveSession) {
+                  return;
+                }
+
+                setErrorMessage("");
+
+                startTransition(async () => {
+                  try {
+                    await updateSession(token, pendingArchiveSession.id, { isArchived: true });
+
+                    let nextSessions: Session[] = [];
+                    setSessions((current) => {
+                      nextSessions = current.filter((item) => item.id !== pendingArchiveSession.id);
+                      return nextSessions;
+                    });
+
+                    if (activeSessionId === pendingArchiveSession.id) {
+                      const nextSessionId = nextSessions[0]?.id ?? "";
+                      setActiveSessionId(nextSessionId);
+                      setMessages([]);
+                    }
+
+                    setPendingArchiveSession(null);
+                  } catch (error) {
+                    setErrorMessage(error instanceof Error ? error.message : "删除会话失败");
+                  }
+                });
+              }}
+              type="button"
+            >
+              {isPending ? "删除中..." : "确认删除"}
+            </Button>
+          </div>
+        </div>
+      </WorkspaceModalShell>
     </main>
   );
 }

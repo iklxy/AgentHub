@@ -43,9 +43,12 @@ type Session struct {
 	RuntimeSessionKey  string `json:"runtimeSessionKey"`
 	CreatedFromSession string `json:"createdFromSessionId"`
 	StartedAt          string `json:"startedAt"`
+	CreatedAt          string `json:"createdAt"`
+	CreatedAtLabel     string `json:"createdAtLabel"`
 	LastActiveAt       string `json:"lastActiveAt"`
 	LastActiveAtLabel  string `json:"lastActiveAtLabel"`
 	LastMessagePreview string `json:"lastMessagePreview"`
+	IsPinned           bool   `json:"isPinned"`
 }
 
 // AgentOption represents one available agent choice in session creation flows.
@@ -102,7 +105,9 @@ type CreateSessionRequest struct {
 
 // UpdateSessionRequest carries task session update input.
 type UpdateSessionRequest struct {
-	Title string `json:"title"`
+	Title      *string `json:"title"`
+	IsPinned   *bool   `json:"isPinned"`
+	IsArchived *bool   `json:"isArchived"`
 }
 
 // CreateMessageRequest carries user input for one session round.
