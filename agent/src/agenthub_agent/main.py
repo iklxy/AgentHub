@@ -1,15 +1,13 @@
 # Date: 2026-05-25
 # Author: XinYang Li
 
-"""Minimal CLI entrypoint for the AgentHub agent layer."""
+"""Minimal CLI entrypoint for the AgentHub session-aware agent layer."""
 
 from __future__ import annotations
 
 import argparse
-import json
-from typing import Any
 
-from agenthub_agent.claude_adapter import PromptContext, build_prompt, run_claude_prompt
+from agenthub_agent.claude_adapter import AgentRuntimeContext, run_agent_command
 from agenthub_agent.logging import get_logger
 
 
@@ -20,31 +18,19 @@ def parse_args() -> argparse.Namespace:
         None: Arguments are read from the command line.
 
     Returns:
-        The parsed namespace containing task metadata and current user input.
+        The parsed namespace containing session runtime metadata and current user input.
     """
-    parser = argparse.ArgumentParser(description="AgentHub v0.1 Claude CLI adapter")
+    parser = argparse.ArgumentParser(description="AgentHub v0.2 Claude CLI adapter")
+    parser.add_argument("--agent-name", required=True)
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--agent-workdir", required=True)
+    parser.add_argument("--agent-rule-file", required=True)
     parser.add_argument("--task-title", required=True)
     parser.add_argument("--task-description", required=True)
+    parser.add_argument("--session-title", required=True)
+    parser.add_argument("--command-mode", choices=["start", "resume"], required=True)
     parser.add_argument("--user-input", required=True)
-    parser.add_argument("--history-json", default="[]")
     return parser.parse_args()
-
-
-def load_history(raw_history: str) -> list[dict[str, str]]:
-    """Load message history from a JSON string.
-
-    Args:
-        raw_history: The JSON string passed on the command line.
-
-    Returns:
-        A validated list of history items with role and content fields.
-    """
-    parsed: Any = json.loads(raw_history)
-
-    if not isinstance(parsed, list):
-        raise ValueError("history-json must be a JSON array")
-
-    return [item for item in parsed if isinstance(item, dict)]
 
 
 def main() -> int:
@@ -58,26 +44,57 @@ def main() -> int:
     """
     logger = get_logger()
     args = parse_args()
-    history = load_history(args.history_json)
 
-    context = PromptContext(
-      task_title=args.task_title,
-      task_description=args.task_description,
-      message_history=history,
-      user_input=args.user_input,
+    context = AgentRuntimeContext(
+        agent_name=args.agent_name,
+        session_id=args.session_id,
+        agent_workdir=args.agent_workdir,
+        agent_rule_file=args.agent_rule_file,
+        task_title=args.task_title,
+        task_description=args.task_description,
+        session_title=args.session_title,
+        command_mode=args.command_mode,
+        user_input=args.user_input,
     )
 
-    logger.info("agent request received", extra={"context": {"task_title": args.task_title}})
+    logger.info(
+        "agent request received",
+        extra={
+            "context": {
+                "agent_name": args.agent_name,
+                "session_id": args.session_id,
+                "command_mode": args.command_mode,
+            }
+        },
+    )
 
     try:
-        prompt = build_prompt(context)
-        output = run_claude_prompt(prompt=prompt)
+        output = run_agent_command(context)
     except Exception as exc:  # noqa: BLE001
-        logger.error("agent request failed", extra={"context": {"error": str(exc)}})
+        logger.error(
+            "agent request failed",
+            extra={
+                "context": {
+                    "agent_name": args.agent_name,
+                    "session_id": args.session_id,
+                    "command_mode": args.command_mode,
+                    "error": str(exc),
+                }
+            },
+        )
         return 1
 
     print(output)
-    logger.info("agent request finished")
+    logger.info(
+        "agent request finished",
+        extra={
+            "context": {
+                "agent_name": args.agent_name,
+                "session_id": args.session_id,
+                "command_mode": args.command_mode,
+            }
+        },
+    )
     return 0
 
 

@@ -7,8 +7,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -98,4 +100,28 @@ func getRequestID(request *http.Request) string {
 		return ""
 	}
 	return requestID
+}
+
+/**
+ * getAuthenticatedUserID extracts the bearer token and treats it as the current user identifier.
+ * Params:
+ * - request: the incoming HTTP request that may contain the Authorization header.
+ */
+func getAuthenticatedUserID(request *http.Request) (string, error) {
+	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
+	if authorization == "" {
+		return "", errors.New("missing authorization header")
+	}
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authorization, prefix) {
+		return "", errors.New("invalid authorization header")
+	}
+
+	userID := strings.TrimSpace(strings.TrimPrefix(authorization, prefix))
+	if userID == "" {
+		return "", errors.New("missing bearer token")
+	}
+
+	return userID, nil
 }

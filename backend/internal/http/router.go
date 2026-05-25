@@ -9,7 +9,7 @@ import (
 )
 
 /**
- * NewRouter wires the v0.1 backend routes to their handlers.
+ * NewRouter wires the v0.2 backend routes to their handlers.
  * Params:
  * - logger: the shared backend logger used for request logging middleware.
  * - handlers: the HTTP handlers with store and logger dependencies attached.
@@ -25,6 +25,10 @@ func NewRouter(logger *slog.Logger, handlers *Handlers) http.Handler {
 	mux.HandleFunc("PATCH /api/workspace", handlers.UpdateWorkspace)
 	mux.HandleFunc("GET /api/tasks", handlers.ListTasks)
 	mux.HandleFunc("POST /api/tasks", handlers.CreateTask)
+	mux.HandleFunc("GET /api/agents", handlers.ListAgents)
+	mux.HandleFunc("POST /api/sessions", handlers.CreateSession)
+	mux.HandleFunc("GET /api/sessions/", routeSessionResources(handlers))
+	mux.HandleFunc("PATCH /api/sessions/", routeSessionResources(handlers))
 	mux.HandleFunc("GET /api/tasks/", routeTaskSubresources(handlers))
 	mux.HandleFunc("POST /api/tasks/", routeTaskSubresources(handlers))
 
@@ -41,14 +45,34 @@ func routeTaskSubresources(handlers *Handlers) http.HandlerFunc {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/tasks/":
 			WriteError(writer, http.StatusBadRequest, "task id is required")
-		case request.Method == http.MethodGet && hasSuffix(request.URL.Path, "/conversations"):
-			handlers.GetConversations(writer, request)
+		case request.Method == http.MethodGet && hasSuffix(request.URL.Path, "/sessions"):
+			handlers.ListSessions(writer, request)
+		case request.Method == http.MethodGet && hasSuffix(request.URL.Path, "/session-agents"):
+			handlers.ListTaskSessionAgents(writer, request)
 		case request.Method == http.MethodGet && hasSuffix(request.URL.Path, "/messages"):
 			handlers.GetMessages(writer, request)
 		case request.Method == http.MethodGet:
 			handlers.GetTask(writer, request)
 		case request.Method == http.MethodPost && hasSuffix(request.URL.Path, "/messages"):
 			handlers.CreateMessage(writer, request)
+		default:
+			WriteError(writer, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+/**
+ * routeSessionResources dispatches /api/sessions/{sessionId} requests by method.
+ * Params:
+ * - handlers: the shared handler collection used for the session routes.
+ */
+func routeSessionResources(handlers *Handlers) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodGet:
+			handlers.GetSession(writer, request)
+		case http.MethodPatch:
+			handlers.UpdateSession(writer, request)
 		default:
 			WriteError(writer, http.StatusMethodNotAllowed, "method not allowed")
 		}

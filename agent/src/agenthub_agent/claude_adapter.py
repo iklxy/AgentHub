@@ -1,51 +1,68 @@
 # Date: 2026-05-25
 # Author: XinYang Li
 
-"""Claude CLI adapter and prompt assembly helpers for AgentHub v0.1."""
+"""Claude CLI adapter and runtime helpers for AgentHub v0.2."""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(slots=True)
-class PromptContext:
-    """Carries the minimum context needed to build a Claude prompt."""
+class AgentRuntimeContext:
+    """Carries the minimum runtime context needed to execute one agent round."""
 
+    agent_name: str
+    session_id: str
+    agent_workdir: str
+    agent_rule_file: str
     task_title: str
     task_description: str
-    message_history: list[dict[str, str]]
+    session_title: str
+    command_mode: str
     user_input: str
 
 
-def build_prompt(context: PromptContext) -> str:
-    """Assemble the v0.1 prompt string.
+def build_first_message_prompt(context: AgentRuntimeContext) -> str:
+    """Build the first-round prompt that establishes task and session context.
 
     Args:
-        context: The task metadata, recent message history, and current user input.
+        context: The session runtime metadata and current user input.
 
     Returns:
-        A prompt string that keeps the task and transcript context together.
+        The prompt string used when a Claude session starts for the first time.
     """
-    history_lines = []
-
-    for item in context.message_history[-8:]:
-        role = item.get("role", "unknown")
-        content = item.get("content", "")
-        history_lines.append(f"{role}: {content}")
-
-    history_text = "\n".join(history_lines) if history_lines else "暂无历史消息"
+    rule_text = read_rule_file(context.agent_rule_file)
 
     return (
-        "你是 AgentHub 中的主 Agent 银河。\n"
-        "你需要围绕当前 task 上下文持续回答用户，并保持表达清晰、直接、可继续追问。\n\n"
+        f"你是 AgentHub 中的 {context.agent_name}。\n"
+        "你正在一个持久 session 中工作，请围绕当前 task 与当前 session 持续协作。\n\n"
         f"Task Title: {context.task_title}\n"
-        f"Task Description: {context.task_description}\n\n"
-        f"History:\n{history_text}\n\n"
-        f"User Input:\n{context.user_input}\n"
+        f"Task Description: {context.task_description}\n"
+        f"Session Title: {context.session_title}\n\n"
+        "Agent Rules:\n"
+        f"{rule_text}\n\n"
+        "User Input:\n"
+        f"{context.user_input}\n"
     )
+
+
+def read_rule_file(rule_file: str) -> str:
+    """Read the current Agent.md file for the active runtime target.
+
+    Args:
+        rule_file: The absolute path of the Agent.md file.
+
+    Returns:
+        The rule file content, or a fallback sentence when the file is missing.
+    """
+    path = Path(rule_file)
+    if not path.exists():
+        return "No agent-specific rules were found."
+    return path.read_text(encoding="utf-8").strip() or "No agent-specific rules were found."
 
 
 def ensure_claude_cli_available(executable: str = "claude") -> None:
@@ -61,11 +78,11 @@ def ensure_claude_cli_available(executable: str = "claude") -> None:
         raise FileNotFoundError(f"Claude CLI executable not found: {executable}")
 
 
-def run_claude_prompt(prompt: str, executable: str = "claude", timeout_seconds: int = 60) -> str:
-    """Execute a prompt against the Claude CLI.
+def run_agent_command(context: AgentRuntimeContext, executable: str = "claude", timeout_seconds: int = 90) -> str:
+    """Execute one agent round against the Claude CLI.
 
     Args:
-        prompt: The fully assembled prompt string passed to Claude.
+        context: The session runtime context for this round.
         executable: The CLI executable name or absolute path.
         timeout_seconds: The maximum execution time before subprocess timeout.
 
@@ -77,19 +94,25 @@ def run_claude_prompt(prompt: str, executable: str = "claude", timeout_seconds: 
     """
     ensure_claude_cli_available(executable)
 
+    if context.command_mode == "start":
+        prompt = build_first_message_prompt(context)
+        command = [executable, "--session-id", context.session_id, "-p", prompt]
+    else:
+        command = [executable, "-p", "--resume", context.session_id, context.user_input]
+
     result = subprocess.run(
-        [executable, "-p", prompt],
+        command,
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
         check=False,
+        cwd=context.agent_workdir,
     )
 
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Claude CLI execution failed")
 
     output = result.stdout.strip()
-
     if not output:
         raise RuntimeError("Claude CLI returned empty output")
 

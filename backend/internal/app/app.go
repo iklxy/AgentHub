@@ -37,8 +37,8 @@ func New() (*App, error) {
 		return nil, err
 	}
 
-	agentWorkDir, pythonPath := agent.ResolveAgentPaths(cfg.AgentRootDir)
-	agentService := agent.NewService(logger, agentWorkDir, pythonPath, cfg.PythonBin)
+	agentCodeDir, pythonPath, harnessRoot := agent.ResolveAgentPaths(cfg.AgentRootDir)
+	agentService := agent.NewService(logger, agentCodeDir, harnessRoot, pythonPath, cfg.PythonBin)
 	handlers := &httpx.Handlers{
 		Logger:       logger,
 		Store:        store,

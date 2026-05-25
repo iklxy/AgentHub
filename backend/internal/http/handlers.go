@@ -270,40 +270,204 @@ func (h *Handlers) GetTask(writer http.ResponseWriter, request *http.Request) {
 }
 
 /**
- * GetConversations returns the default main agent conversation for a task.
+ * ListSessions returns the task session list for the current user.
  * Params:
  * - writer: the HTTP response writer.
- * - request: the incoming HTTP request that contains the task conversation path.
+ * - request: the incoming HTTP request that contains the task session path.
  */
-func (h *Handlers) GetConversations(writer http.ResponseWriter, request *http.Request) {
+func (h *Handlers) ListSessions(writer http.ResponseWriter, request *http.Request) {
 	userID, authErr := getAuthenticatedUserID(request)
 	if authErr != nil {
-		h.logFailure(request, "conversations_get_auth_user", authErr)
+		h.logFailure(request, "sessions_list_auth_user", authErr)
 		WriteError(writer, http.StatusUnauthorized, authErr.Error())
 		return
 	}
 
 	taskID, action, err := parseTaskSubroute(request.URL.Path)
-	if err != nil || action != "conversations" {
+	if err != nil || action != "sessions" {
 		if err != nil {
-			h.logFailure(request, "conversations_get_parse_route", err, "userId", userID)
+			h.logFailure(request, "sessions_list_parse_route", err, "userId", userID)
 		}
-		WriteError(writer, http.StatusBadRequest, "invalid conversations route")
+		WriteError(writer, http.StatusBadRequest, "invalid sessions route")
 		return
 	}
 
-	conversation, err := h.Store.GetConversation(userID, taskID)
+	sessions, err := h.Store.ListSessions(userID, taskID)
 	if err != nil {
-		h.logFailure(request, "conversations_get", err, "userId", userID, "taskId", taskID)
+		h.logFailure(request, "sessions_list", err, "userId", userID, "taskId", taskID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusOK, sessions)
+}
+
+/**
+ * ListTaskSessionAgents returns available branch-session agent choices for the task.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that contains the task agent-selection path.
+ */
+func (h *Handlers) ListTaskSessionAgents(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "session_agents_list_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	taskID, action, err := parseTaskSubroute(request.URL.Path)
+	if err != nil || action != "session-agents" {
+		if err != nil {
+			h.logFailure(request, "session_agents_list_parse_route", err, "userId", userID)
+		}
+		WriteError(writer, http.StatusBadRequest, "invalid session agents route")
+		return
+	}
+
+	agents, err := h.Store.ListSessionAgents(userID, taskID)
+	if err != nil {
+		h.logFailure(request, "session_agents_list", err, "userId", userID, "taskId", taskID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusOK, agents)
+}
+
+/**
+ * ListAgents returns enabled agents for the current task context selected by query string.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that may contain the taskId query parameter.
+ */
+func (h *Handlers) ListAgents(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "agents_list_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	taskID := strings.TrimSpace(request.URL.Query().Get("taskId"))
+	if taskID == "" {
+		WriteError(writer, http.StatusBadRequest, "taskId is required")
+		return
+	}
+
+	agents, err := h.Store.ListSessionAgents(userID, taskID)
+	if err != nil {
+		h.logFailure(request, "agents_list", err, "userId", userID, "taskId", taskID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusOK, agents)
+}
+
+/**
+ * CreateSession creates one new task session for the authenticated user.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that carries the session payload.
+ */
+func (h *Handlers) CreateSession(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "session_create_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	var input domain.CreateSessionRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		h.logFailure(request, "session_create_decode", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, "invalid session payload")
+		return
+	}
+
+	session, err := h.Store.CreateSession(userID, input)
+	if err != nil {
+		h.logFailure(request, "session_create", err, "userId", userID, "taskId", input.TaskID, "primaryAgentId", input.PrimaryAgentID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	h.Logger.Info("session created", "sessionId", session.ID, "taskId", session.TaskID, "agentId", session.PrimaryAgentID)
+	WriteJSON(writer, http.StatusCreated, session)
+}
+
+/**
+ * GetSession returns one session detail for the authenticated user.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that contains the session detail path.
+ */
+func (h *Handlers) GetSession(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "session_get_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	sessionID, err := parseSessionRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "session_get_parse_route", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	session, err := h.Store.GetSession(userID, sessionID)
+	if err != nil {
+		h.logFailure(request, "session_get", err, "userId", userID, "sessionId", sessionID)
 		WriteError(writer, http.StatusNotFound, err.Error())
 		return
 	}
 
-	WriteJSON(writer, http.StatusOK, []domain.Conversation{conversation})
+	WriteJSON(writer, http.StatusOK, session)
 }
 
 /**
- * GetMessages returns the current transcript for a task.
+ * UpdateSession updates editable metadata for one session.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that carries the session update payload.
+ */
+func (h *Handlers) UpdateSession(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "session_update_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	sessionID, err := parseSessionRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "session_update_parse_route", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var input domain.UpdateSessionRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		h.logFailure(request, "session_update_decode", err, "userId", userID, "sessionId", sessionID)
+		WriteError(writer, http.StatusBadRequest, "invalid session payload")
+		return
+	}
+
+	session, err := h.Store.UpdateSession(userID, sessionID, input)
+	if err != nil {
+		h.logFailure(request, "session_update", err, "userId", userID, "sessionId", sessionID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusOK, session)
+}
+
+/**
+ * GetMessages returns the current transcript for a task session.
  * Params:
  * - writer: the HTTP response writer.
  * - request: the incoming HTTP request that contains the task messages path.
@@ -325,10 +489,16 @@ func (h *Handlers) GetMessages(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	messages, err := h.Store.ListMessages(userID, taskID)
+	sessionID := strings.TrimSpace(request.URL.Query().Get("sessionId"))
+	if sessionID == "" {
+		WriteError(writer, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+
+	messages, err := h.Store.ListMessages(userID, taskID, sessionID)
 	if err != nil {
-		h.logFailure(request, "messages_list", err, "userId", userID, "taskId", taskID)
-		WriteError(writer, http.StatusNotFound, err.Error())
+		h.logFailure(request, "messages_list", err, "userId", userID, "taskId", taskID, "sessionId", sessionID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -336,7 +506,7 @@ func (h *Handlers) GetMessages(writer http.ResponseWriter, request *http.Request
 }
 
 /**
- * CreateMessage executes the main agent and stores the resulting message pair.
+ * CreateMessage executes the active session agent and stores the resulting message pair.
  * Params:
  * - writer: the HTTP response writer.
  * - request: the incoming HTTP request that carries the message payload.
@@ -372,28 +542,46 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	history, err := h.Store.ListMessages(userID, taskID)
+	session, err := h.Store.GetSession(userID, input.SessionID)
 	if err != nil {
-		h.logFailure(request, "message_create_list_history", err, "userId", userID, "taskId", taskID)
-		WriteError(writer, http.StatusBadRequest, err.Error())
+		h.logFailure(request, "message_create_get_session", err, "userId", userID, "taskId", taskID, "sessionId", input.SessionID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+	if session.TaskID != taskID {
+		h.logFailure(request, "message_create_session_mismatch", errors.New("session does not belong to task"), "userId", userID, "taskId", taskID, "sessionId", input.SessionID)
+		WriteError(writer, http.StatusBadRequest, "session does not belong to the task")
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunMainAgent(task, history, input.Content)
+	assistantContent, err := h.AgentService.RunSessionAgent(task, session, input.Content)
 	if err != nil {
-		h.logFailure(request, "message_create_run_agent", err, "userId", userID, "taskId", taskID)
+		h.logFailure(
+			request,
+			"message_create_run_agent",
+			err,
+			"userId", userID,
+			"taskId", taskID,
+			"sessionId", session.ID,
+			"agentId", session.PrimaryAgentID,
+			"agentName", session.PrimaryAgentName,
+		)
+		if errors.Is(err, agent.ErrRuntimeNotImplemented) {
+			WriteError(writer, http.StatusNotImplemented, err.Error())
+			return
+		}
 		WriteError(writer, http.StatusBadGateway, "agent execution failed")
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, input.Content, assistantContent)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent)
 	if err != nil {
-		h.logFailure(request, "message_create_store_pair", err, "userId", userID, "taskId", taskID)
+		h.logFailure(request, "message_create_store_pair", err, "userId", userID, "taskId", taskID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	h.Logger.Info("message round stored", "taskId", taskID)
+	h.Logger.Info("message round stored", "taskId", taskID, "sessionId", session.ID, "agentId", session.PrimaryAgentID)
 	WriteJSON(writer, http.StatusCreated, map[string]domain.Message{
 		"userMessage":      userMessage,
 		"assistantMessage": assistantMessage,
@@ -421,6 +609,20 @@ func parseTaskSubroute(path string) (string, string, error) {
 }
 
 /**
+ * parseSessionRoute extracts the session identifier from /api/sessions/{sessionId}.
+ * Params:
+ * - path: the request path that starts with /api/sessions/.
+ */
+func parseSessionRoute(path string) (string, error) {
+	trimmed := strings.TrimPrefix(path, "/api/sessions/")
+	sessionID := strings.Trim(trimmed, "/")
+	if sessionID == "" {
+		return "", errorsNew("session id is required")
+	}
+	return sessionID, nil
+}
+
+/**
  * errorsNew creates a lightweight error without importing the errors package twice in many handlers.
  * Params:
  * - message: the error text returned to the caller.
@@ -433,25 +635,6 @@ type routeError struct {
 	message string
 }
 
-/**
- * Error returns the route error text.
- * Params:
- * - none: the error carries its message inside the receiver.
- */
-func (e *routeError) Error() string {
-	return e.message
-}
-
-func getAuthenticatedUserID(request *http.Request) (string, error) {
-	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
-	if authorization == "" {
-		return "", errors.New("missing authorization token")
-	}
-
-	token := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
-	if token == "" || token == authorization {
-		return "", errors.New("invalid authorization token")
-	}
-
-	return token, nil
+func (r *routeError) Error() string {
+	return r.message
 }

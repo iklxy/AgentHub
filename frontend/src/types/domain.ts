@@ -21,21 +21,43 @@ export type Task = {
   title: string;
   description: string;
   status: TaskStatus;
+  currentSessionId: string;
   updatedAtLabel: string;
 };
 
-export type Conversation = {
+export type SessionChatMode = "single" | "group";
+export type SessionKind = "primary" | "branch";
+
+export type Session = {
   id: string;
   taskId: string;
-  agentName: string;
-  agentType: "main";
-  summary: string;
+  title: string;
+  chatMode: SessionChatMode;
+  sessionKind: SessionKind;
+  primaryAgentId: string;
+  primaryAgentName: string;
+  runtimeProvider: string;
+  runtimeSessionKey: string;
+  createdFromSessionId: string;
+  startedAt: string;
+  lastActiveAt: string;
+  lastActiveAtLabel: string;
+  lastMessagePreview: string;
+};
+
+export type AgentOption = {
+  id: string;
+  name: string;
+  kind: string;
+  providerType: string;
 };
 
 export type MessageRole = "user" | "assistant" | "system";
 
 export type Message = {
   id: string;
+  taskId: string;
+  sessionId: string;
   role: MessageRole;
   content: string;
   timeLabel: string;

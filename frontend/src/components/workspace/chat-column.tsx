@@ -1,45 +1,56 @@
 // Date: 2026-05-25
 // Author: XinYang Li
 
-import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
-
 import { StatusBadge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
 import { ChatInput } from "@/components/workspace/chat-input";
 import { MessageBubble } from "@/components/workspace/message-bubble";
-import type { Message, Task } from "@/types/domain";
+import type { Message, Session, Task } from "@/types/domain";
 
 /**
- * Renders the right-side chat workspace for a selected task.
- * @param props.task The active task that defines the current conversation context.
- * @param props.messages The ordered message list rendered inside the transcript.
- * @param props.isSending Whether the current task is waiting for an assistant reply.
+ * Renders the right-side chat workspace for a selected task session.
  * @param props.errorMessage Optional status text shown above the input area.
+ * @param props.isSending Whether the current task session is waiting for an assistant reply.
+ * @param props.messages The ordered message list rendered inside the transcript.
  * @param props.onSendMessage The callback executed when the user submits a message.
+ * @param props.session The active task session displayed in this chat column.
+ * @param props.task The active task that owns the current session.
  * @returns The chat column panel.
  */
 export function ChatColumn({
-  task,
-  messages,
-  isSending,
   errorMessage,
+  isSending,
+  messages,
   onSendMessage,
+  session,
+  task,
 }: {
-  task: Task;
-  messages: Message[];
-  isSending: boolean;
   errorMessage?: string;
+  isSending: boolean;
+  messages: Message[];
   onSendMessage: (content: string) => void;
+  session: Session;
+  task: Task;
 }): JSX.Element {
   return (
     <Panel className="flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="shrink-0 border-b border-line px-7 py-3">
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <Link className="inline-flex items-center gap-2 text-sm text-ink/56 transition hover:text-pine" href="/workspace">
-            <ArrowLeft className="h-4 w-4" />
-            返回工作区
-          </Link>
+      <header className="shrink-0 border-b border-line px-7 py-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-2">
+            <p className="text-xs uppercase tracking-[0.22em] text-pine/64">Current Session</p>
+            <h2 className="font-display text-3xl text-ink">{session.title}</h2>
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-full bg-mist px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-ink/58">
+                {session.sessionKind === "primary" ? "主会话" : "新增会话"}
+              </span>
+              <span className="rounded-full border border-pine/20 bg-pine/10 px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-pine">
+                {session.primaryAgentName}
+              </span>
+              <span className="rounded-full bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-ink/44">
+                {task.title}
+              </span>
+            </div>
+          </div>
           <StatusBadge status={task.status} />
         </div>
       </header>
@@ -50,7 +61,7 @@ export function ChatColumn({
             <div className="max-w-md space-y-3 text-center">
               <p className="text-xs uppercase tracking-[0.3em] text-ink/40">Ready</p>
               <h2 className="font-display text-3xl text-ink">从第一条消息开始</h2>
-              <p className="text-sm leading-7 text-ink/58">当前任务已经建好</p>
+              <p className="text-sm leading-7 text-ink/58">这个 session 还没有任何消息，发送后会建立对应的 Claude runtime session。</p>
             </div>
           </div>
         ) : (
@@ -60,7 +71,7 @@ export function ChatColumn({
 
       <div className="shrink-0 border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}
-        <ChatInput isSending={isSending} onSend={onSendMessage} placeholder="围绕当前任务继续提问，例如：帮我拆成 3 个学习阶段。" />
+        <ChatInput isSending={isSending} onSend={onSendMessage} placeholder={`继续围绕「${session.title}」发消息，例如：把这个分支拆成更细的执行步骤。`} />
       </div>
     </Panel>
   );

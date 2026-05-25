@@ -3,7 +3,7 @@
 
 package domain
 
-// User represents a user account for AgentHub v0.1.
+// User represents a user account for AgentHub.
 type User struct {
 	ID        string `json:"id"`
 	Username  string `json:"username"`
@@ -11,7 +11,7 @@ type User struct {
 	AvatarURL string `json:"avatarUrl"`
 }
 
-// Workspace represents one personal workspace tied to the current user.
+// Workspace represents one workspace visible to the current user.
 type Workspace struct {
 	ID          string `json:"id"`
 	UserID      string `json:"userId"`
@@ -21,32 +21,50 @@ type Workspace struct {
 
 // Task represents one task entity inside the workspace.
 type Task struct {
-	ID             string `json:"id"`
-	WorkspaceID    string `json:"workspaceId"`
-	Title          string `json:"title"`
-	Description    string `json:"description"`
-	Status         string `json:"status"`
-	UpdatedAtLabel string `json:"updatedAtLabel"`
+	ID               string `json:"id"`
+	WorkspaceID      string `json:"workspaceId"`
+	Title            string `json:"title"`
+	Description      string `json:"description"`
+	Status           string `json:"status"`
+	CurrentSessionID string `json:"currentSessionId"`
+	UpdatedAtLabel   string `json:"updatedAtLabel"`
 }
 
-// Conversation represents the main agent conversation bound to a task.
-type Conversation struct {
+// Session represents one task-level conversation container.
+type Session struct {
+	ID                 string `json:"id"`
+	TaskID             string `json:"taskId"`
+	Title              string `json:"title"`
+	ChatMode           string `json:"chatMode"`
+	SessionKind        string `json:"sessionKind"`
+	PrimaryAgentID     string `json:"primaryAgentId"`
+	PrimaryAgentName   string `json:"primaryAgentName"`
+	RuntimeProvider    string `json:"runtimeProvider"`
+	RuntimeSessionKey  string `json:"runtimeSessionKey"`
+	CreatedFromSession string `json:"createdFromSessionId"`
+	StartedAt          string `json:"startedAt"`
+	LastActiveAt       string `json:"lastActiveAt"`
+	LastActiveAtLabel  string `json:"lastActiveAtLabel"`
+	LastMessagePreview string `json:"lastMessagePreview"`
+}
+
+// AgentOption represents one available agent choice in session creation flows.
+type AgentOption struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	ProviderType string `json:"providerType"`
+}
+
+// Message represents one chat message row for a session transcript.
+type Message struct {
 	ID        string `json:"id"`
 	TaskID    string `json:"taskId"`
-	AgentName string `json:"agentName"`
-	AgentType string `json:"agentType"`
-	Summary   string `json:"summary"`
-}
-
-// Message represents one chat message row for a task transcript.
-type Message struct {
-	ID             string `json:"id"`
-	TaskID         string `json:"taskId"`
-	ConversationID string `json:"conversationId"`
-	Role           string `json:"role"`
-	Content        string `json:"content"`
-	Status         string `json:"status"`
-	TimeLabel      string `json:"timeLabel"`
+	SessionID string `json:"sessionId"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Status    string `json:"status"`
+	TimeLabel string `json:"timeLabel"`
 }
 
 // LoginRequest carries the login payload.
@@ -74,7 +92,21 @@ type CreateTaskRequest struct {
 	Description string `json:"description"`
 }
 
-// CreateMessageRequest carries user input for the main agent.
+// CreateSessionRequest carries task session creation input.
+type CreateSessionRequest struct {
+	TaskID         string `json:"taskId"`
+	Title          string `json:"title"`
+	ChatMode       string `json:"chatMode"`
+	PrimaryAgentID string `json:"primaryAgentId"`
+}
+
+// UpdateSessionRequest carries task session update input.
+type UpdateSessionRequest struct {
+	Title string `json:"title"`
+}
+
+// CreateMessageRequest carries user input for one session round.
 type CreateMessageRequest struct {
-	Content string `json:"content"`
+	SessionID string `json:"sessionId"`
+	Content   string `json:"content"`
 }
