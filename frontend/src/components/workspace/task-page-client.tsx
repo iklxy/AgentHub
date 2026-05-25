@@ -46,6 +46,24 @@ function sortSessions(items: Session[]): Session[] {
 }
 
 /**
+ * Builds one local optimistic user message so the transcript can render immediately before the backend round finishes.
+ * @param taskId The current task identifier.
+ * @param sessionId The active session identifier that owns the message.
+ * @param content The trimmed user message content.
+ * @returns The local optimistic message entity rendered before the server response arrives.
+ */
+function buildOptimisticUserMessage(taskId: string, sessionId: string, content: string): Message {
+  return {
+    id: `local-user-${Date.now()}`,
+    taskId,
+    sessionId,
+    role: "user",
+    content,
+    timeLabel: "刚刚",
+  };
+}
+
+/**
  * Renders the task workspace page backed by real API calls.
  * @param props.taskId The task identifier from the route segment.
  * @returns The interactive task page.
@@ -204,6 +222,9 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             messages={messages}
             onSendMessage={(content) => {
               setErrorMessage("");
+              const optimisticMessage = buildOptimisticUserMessage(task.id, activeSession.id, content);
+
+              setMessages((current) => [...current, optimisticMessage]);
 
               startTransition(async () => {
                 try {
@@ -212,7 +233,11 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                     content,
                   });
 
-                  setMessages((current) => [...current, response.userMessage, response.assistantMessage]);
+                  setMessages((current) => [
+                    ...current.filter((item) => item.id !== optimisticMessage.id),
+                    response.userMessage,
+                    response.assistantMessage,
+                  ]);
                   setTask((current) =>
                     current
                       ? {
@@ -251,6 +276,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                     ),
                   );
                 } catch (error) {
+                  setMessages((current) => current.filter((item) => item.id !== optimisticMessage.id));
                   setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
                 }
               });

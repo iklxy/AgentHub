@@ -26,6 +26,8 @@ export function ChatInput({
   onSend: (value: string) => void;
 }): JSX.Element {
   const [value, setValue] = useState("");
+  const [isComposing, setIsComposing] = useState(false);
+  const [pendingEnter, setPendingEnter] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -37,6 +39,22 @@ export function ChatInput({
     textarea.style.height = "0px";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
   }, [value]);
+
+  useEffect(() => {
+    if (!pendingEnter) {
+      return;
+    }
+
+    /**
+     * Clears the pending double-enter window when the second Enter key does not arrive in time.
+     * @param none The timer does not accept external parameters.
+     */
+    const timer = window.setTimeout(() => {
+      setPendingEnter(false);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [pendingEnter]);
 
   return (
     <form
@@ -56,16 +74,32 @@ export function ChatInput({
       <Textarea
         className="h-11 min-h-0 max-h-48 resize-none overflow-y-auto border-none p-0 leading-7 focus:ring-0"
         onChange={(event) => setValue(event.target.value)}
+        onCompositionEnd={() => setIsComposing(false)}
+        onCompositionStart={() => setIsComposing(true)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            const trimmed = value.trim();
-            if (!trimmed || isSending) {
-              return;
-            }
-            onSend(trimmed);
-            setValue("");
+          if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey) {
+            return;
           }
+
+          if (isComposing || event.nativeEvent.isComposing) {
+            return;
+          }
+
+          if (!pendingEnter) {
+            setPendingEnter(true);
+            return;
+          }
+
+          event.preventDefault();
+          setPendingEnter(false);
+
+          const trimmed = value.trim();
+          if (!trimmed || isSending) {
+            return;
+          }
+
+          onSend(trimmed);
+          setValue("");
         }}
         placeholder={placeholder}
         ref={textareaRef}
@@ -73,6 +107,7 @@ export function ChatInput({
         value={value}
       />
       <div className="mt-4 flex items-center justify-between">
+        <div />
         <Button className="h-12 w-12 rounded-full p-0" disabled={isSending || value.trim().length === 0} size="icon" type="submit">
           <ArrowUp className="h-4 w-4" />
         </Button>
