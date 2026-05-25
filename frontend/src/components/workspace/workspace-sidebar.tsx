@@ -40,7 +40,6 @@ export function WorkspaceSidebar({
   return (
     <Panel className="flex h-full min-h-[calc(100vh-3rem)] flex-col p-5">
       <div className="space-y-4 border-b border-line pb-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-pine/65">Workspace</p>
         <div className="space-y-2">
           <h2 className="font-display text-3xl text-ink">{workspace.name}</h2>
           <p className="text-sm leading-7 text-ink/65">{workspace.description}</p>
@@ -54,7 +53,6 @@ export function WorkspaceSidebar({
 
       <div className="mt-5 flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-ink/42">Tasks</p>
           <p className="mt-1 text-sm text-ink/56">{tasks.length} 个任务</p>
         </div>
         {onCreateTask ? (

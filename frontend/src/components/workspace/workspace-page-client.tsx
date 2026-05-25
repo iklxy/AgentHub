@@ -96,7 +96,6 @@ export function WorkspacePageClient(): JSX.Element {
           <Panel className="h-full min-h-[calc(100vh-3rem)] p-8">
             <div className="grid h-full gap-8 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="space-y-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-pine/64">Workspace Overview</p>
                 <h1 className="max-w-2xl font-display text-5xl leading-tight text-ink">让任务进入工作台，再让协作自然沉淀成记录与结果物。</h1>
                 {firstTask ? (
                   <Link

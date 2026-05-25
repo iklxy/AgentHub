@@ -10,6 +10,7 @@ import { AgentColumn } from "@/components/workspace/agent-column";
 import { ChatColumn } from "@/components/workspace/chat-column";
 import { SessionCreateModal } from "@/components/workspace/session-create-modal";
 import { TaskSessionSidebar } from "@/components/workspace/task-session-sidebar";
+import { UserSettingsPanel } from "@/components/workspace/user-settings-panel";
 import {
   createMessage,
   createSession,
@@ -21,7 +22,7 @@ import {
   getTasks,
   getWorkspace,
 } from "@/lib/api";
-import { getStoredToken } from "@/lib/auth";
+import { clearStoredToken, getStoredToken } from "@/lib/auth";
 import type { AgentOption, Message, Session, Task, User, Workspace } from "@/types/domain";
 
 /**
@@ -43,6 +44,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isCreateSessionOpen, setIsCreateSessionOpen] = useState(false);
+  const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
   const [sessionDraft, setSessionDraft] = useState({
     title: "",
     chatMode: "single" as const,
@@ -103,7 +105,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null;
 
-  if (!token || !currentUser || !workspace || !task || !activeSession) {
+  if (!token || !currentUser || !workspace || !task) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-mist text-ink">
         <div className="rounded-[28px] border border-line bg-paper px-6 py-5 shadow-panel">
@@ -117,8 +119,9 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
     <main className="h-screen overflow-hidden bg-mist p-6 text-ink">
       <div className="grid h-full gap-6 xl:grid-cols-[320px_280px_1fr]">
         <TaskSessionSidebar
-          activeSessionId={activeSession.id}
+          activeSessionId={activeSession?.id ?? ""}
           onCreateSession={() => setIsCreateSessionOpen(true)}
+          onOpenSettings={() => setIsSettingsPanelOpen(true)}
           onSelectSession={(sessionId) => {
             setErrorMessage("");
             setMessages([]);
@@ -129,65 +132,91 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
           user={currentUser}
         />
 
-        <AgentColumn session={activeSession} />
+        {activeSession ? (
+          <AgentColumn session={activeSession} />
+        ) : (
+          <div className="rounded-[32px] border border-line bg-paper p-6 shadow-panel">
+            <div className="space-y-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-ink/42">参与协作</p>
+              <h2 className="font-display text-2xl text-ink">先创建一个会话</h2>
+              <p className="text-sm leading-7 text-ink/58">单聊模式下，Galaxy 和 Aries 都作为平级 Agent 供你选择。创建后，这里会显示当前会话绑定的 Agent。</p>
+            </div>
+          </div>
+        )}
 
-        <ChatColumn
-          errorMessage={errorMessage}
-          isSending={isPending}
-          messages={messages}
-          onSendMessage={(content) => {
-            setErrorMessage("");
+        {activeSession ? (
+          <ChatColumn
+            errorMessage={errorMessage}
+            isSending={isPending}
+            messages={messages}
+            onSendMessage={(content) => {
+              setErrorMessage("");
 
-            startTransition(async () => {
-              try {
-                const response = await createMessage(token, task.id, {
-                  sessionId: activeSession.id,
-                  content,
-                });
+              startTransition(async () => {
+                try {
+                  const response = await createMessage(token, task.id, {
+                    sessionId: activeSession.id,
+                    content,
+                  });
 
-                setMessages((current) => [...current, response.userMessage, response.assistantMessage]);
-                setTask((current) =>
-                  current
-                    ? {
-                        ...current,
-                        status: "running",
-                        currentSessionId: activeSession.id,
-                        updatedAtLabel: "刚刚",
-                      }
-                    : current,
-                );
-                setTasks((current) =>
-                  current.map((item) =>
-                    item.id === task.id
+                  setMessages((current) => [...current, response.userMessage, response.assistantMessage]);
+                  setTask((current) =>
+                    current
                       ? {
-                          ...item,
+                          ...current,
                           status: "running",
                           currentSessionId: activeSession.id,
                           updatedAtLabel: "刚刚",
                         }
-                      : item,
-                  ),
-                );
-                setSessions((current) =>
-                  current.map((item) =>
-                    item.id === activeSession.id
-                      ? {
-                          ...item,
-                          startedAt: item.startedAt || new Date().toISOString(),
-                          lastActiveAtLabel: "刚刚",
-                          lastMessagePreview: response.assistantMessage.content,
-                        }
-                      : item,
-                  ),
-                );
-              } catch (error) {
-                setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
-              }
-            });
-          }}
-          session={activeSession}
-          task={task}
-        />
+                      : current,
+                  );
+                  setTasks((current) =>
+                    current.map((item) =>
+                      item.id === task.id
+                        ? {
+                            ...item,
+                            status: "running",
+                            currentSessionId: activeSession.id,
+                            updatedAtLabel: "刚刚",
+                          }
+                        : item,
+                    ),
+                  );
+                  setSessions((current) =>
+                    current.map((item) =>
+                      item.id === activeSession.id
+                        ? {
+                            ...item,
+                            startedAt: item.startedAt || new Date().toISOString(),
+                            lastActiveAtLabel: "刚刚",
+                            lastMessagePreview: response.assistantMessage.content,
+                          }
+                        : item,
+                    ),
+                  );
+                } catch (error) {
+                  setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
+                }
+              });
+            }}
+            session={activeSession}
+            task={task}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-[32px] border border-line bg-paper shadow-panel">
+            <div className="border-b border-line px-7 py-5">
+              <h2 className="font-display text-3xl text-ink">还没有会话</h2>
+              <p className="mt-2 text-sm leading-7 text-ink/58">点击左侧 `+` 新建会话，再选择 Galaxy 或 Aries 开始当前任务的单聊协作。</p>
+            </div>
+            <div className="flex flex-1 items-center justify-center px-7 py-6">
+              <div className="max-w-md space-y-3 text-center">
+                <p className="text-xs uppercase tracking-[0.3em] text-ink/40">Ready</p>
+                <h2 className="font-display text-3xl text-ink">先选一个 Agent</h2>
+                <p className="text-sm leading-7 text-ink/58">这次热修后，任务不会自动生成默认对话。会话由你主动创建，后续群聊模式再引入主 Agent 和子 Agent 的概念。</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <SessionCreateModal
@@ -210,15 +239,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                 primaryAgentId: sessionDraft.primaryAgentId,
               });
 
-              setSessions((current) => [...current, createdSession].sort((left, right) => {
-                if (left.sessionKind === "primary" && right.sessionKind !== "primary") {
-                  return -1;
-                }
-                if (left.sessionKind !== "primary" && right.sessionKind === "primary") {
-                  return 1;
-                }
-                return 0;
-              }));
+              setSessions((current) => [createdSession, ...current]);
               setSessionDraft({
                 title: "",
                 chatMode: "single",
@@ -235,6 +256,16 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
         onTitleChange={(value) => setSessionDraft((current) => ({ ...current, title: value }))}
         primaryAgentId={sessionDraft.primaryAgentId}
         title={sessionDraft.title}
+      />
+
+      <UserSettingsPanel
+        isOpen={isSettingsPanelOpen}
+        onClose={() => setIsSettingsPanelOpen(false)}
+        onLogout={() => {
+          clearStoredToken();
+          router.push("/login");
+        }}
+        user={currentUser}
       />
     </main>
   );

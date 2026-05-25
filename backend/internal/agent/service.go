@@ -72,8 +72,8 @@ func NewService(logger *slog.Logger, codeWorkDir string, harnessRoot string, pyt
  * - userInput: the latest user message content.
  */
 func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, userInput string) (string, error) {
-	if !strings.EqualFold(session.PrimaryAgentName, "Galaxy") {
-		return "", fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.PrimaryAgentName)
+	if !supportsClaudeCodeRuntime(session.RuntimeProvider) {
+		return "", fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.RuntimeProvider)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
@@ -153,6 +153,16 @@ func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, user
 		"durationMs", time.Since(startedAt).Milliseconds(),
 	)
 	return result, nil
+}
+
+/**
+ * supportsClaudeCodeRuntime checks whether one session runtime provider should be executed by the Claude Code CLI bridge.
+ * Params:
+ * - runtimeProvider: the provider_type value stored on the bound agent and copied onto the task session.
+ */
+func supportsClaudeCodeRuntime(runtimeProvider string) bool {
+	provider := strings.TrimSpace(strings.ToLower(runtimeProvider))
+	return provider == "claude_code" || provider == "claude-code"
 }
 
 /**

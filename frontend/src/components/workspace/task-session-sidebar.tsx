@@ -3,7 +3,7 @@
 
 "use client";
 
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, Settings2 } from "lucide-react";
 import Link from "next/link";
 
 import { Avatar } from "@/components/ui/avatar";
@@ -17,6 +17,7 @@ import type { Session, Task, User } from "@/types/domain";
  * Renders the left task workspace sidebar with session navigation.
  * @param props.activeSessionId The currently selected session identifier.
  * @param props.onCreateSession Opens the create-session dialog.
+ * @param props.onOpenSettings Opens the user settings side panel from the task workspace footer.
  * @param props.onSelectSession Switches the active session in the task workspace.
  * @param props.sessions The task session list displayed in order.
  * @param props.task The current task metadata shown at the top of the sidebar.
@@ -26,6 +27,7 @@ import type { Session, Task, User } from "@/types/domain";
 export function TaskSessionSidebar({
   activeSessionId,
   onCreateSession,
+  onOpenSettings,
   onSelectSession,
   sessions,
   task,
@@ -33,6 +35,7 @@ export function TaskSessionSidebar({
 }: {
   activeSessionId: string;
   onCreateSession: () => void;
+  onOpenSettings: () => void;
   onSelectSession: (sessionId: string) => void;
   sessions: Session[];
   task: Task;
@@ -48,7 +51,6 @@ export function TaskSessionSidebar({
 
         <div className="mt-5 space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs uppercase tracking-[0.24em] text-pine/64">Task Workspace</p>
             <StatusBadge status={task.status} />
           </div>
           <h1 className="font-display text-3xl leading-tight text-ink">{task.title}</h1>
@@ -58,7 +60,6 @@ export function TaskSessionSidebar({
 
       <div className="mt-5 flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.22em] text-ink/42">Sessions</p>
           <p className="mt-1 text-sm text-ink/56">{sessions.length} 个会话</p>
         </div>
         <Button aria-label="新建 session" onClick={onCreateSession} size="icon" type="button">
@@ -81,9 +82,6 @@ export function TaskSessionSidebar({
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-ink">{session.title}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <span className="rounded-full bg-mist px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-ink/58">
-                    {session.sessionKind === "primary" ? "主会话" : "新增会话"}
-                  </span>
                   <span className="rounded-full bg-white px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-pine">
                     {session.primaryAgentName}
                   </span>
@@ -96,14 +94,22 @@ export function TaskSessionSidebar({
             </p>
           </button>
         ))}
+        {sessions.length === 0 ? (
+          <div className="rounded-[24px] border border-dashed border-line bg-white/70 px-4 py-5 text-sm leading-7 text-ink/56">
+            当前任务还没有会话，点击右上角 `+` 选择 Galaxy 或 Aries 后开始协作。
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-5 flex items-center gap-3 border-t border-line pt-5">
         <Avatar name={user.username} />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-ink">{user.username}</p>
           <p className="truncate text-xs text-ink/52">{user.email}</p>
         </div>
+        <Button aria-label="打开用户设置" onClick={onOpenSettings} size="icon" type="button" variant="ghost">
+          <Settings2 className="h-4 w-4" />
+        </Button>
       </div>
     </Panel>
   );

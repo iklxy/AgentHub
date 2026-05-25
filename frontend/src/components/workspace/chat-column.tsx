@@ -37,12 +37,8 @@ export function ChatColumn({
       <header className="shrink-0 border-b border-line px-7 py-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.22em] text-pine/64">Current Session</p>
             <h2 className="font-display text-3xl text-ink">{session.title}</h2>
             <div className="flex flex-wrap gap-2">
-              <span className="rounded-full bg-mist px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-ink/58">
-                {session.sessionKind === "primary" ? "主会话" : "新增会话"}
-              </span>
               <span className="rounded-full border border-pine/20 bg-pine/10 px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-pine">
                 {session.primaryAgentName}
               </span>
@@ -71,7 +67,7 @@ export function ChatColumn({
 
       <div className="shrink-0 border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}
-        <ChatInput isSending={isSending} onSend={onSendMessage} placeholder={`继续围绕「${session.title}」发消息，例如：把这个分支拆成更细的执行步骤。`} />
+        <ChatInput isSending={isSending} onSend={onSendMessage} placeholder={`继续围绕「${session.title}」发消息，例如：把这个会话拆成更细的执行步骤。`} />
       </div>
     </Panel>
   );

@@ -67,8 +67,7 @@ export function WorkspaceModalShell({
       >
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-5">
           <div>
-            <p className="text-xs uppercase tracking-[0.22em] text-pine/64">Workspace</p>
-            <h2 className="mt-2 font-display text-3xl text-ink">{title}</h2>
+            <h2 className="font-display text-3xl text-ink">{title}</h2>
           </div>
           <Button aria-label="关闭弹窗" onClick={onClose} size="icon" type="button" variant="ghost">
             <X className="h-5 w-5" />

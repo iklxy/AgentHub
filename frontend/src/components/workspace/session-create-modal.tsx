@@ -10,7 +10,7 @@ import { WorkspaceModalShell } from "@/components/workspace/workspace-modal-shel
 
 /**
  * Renders the task session creation dialog used by the v0.2 task workspace.
- * @param props.agents The selectable branch-session agent options.
+ * @param props.agents The selectable single-chat agent options.
  * @param props.chatMode The current chat mode draft value.
  * @param props.isOpen Controls whether the dialog is visible.
  * @param props.isSubmitting Indicates whether the create request is currently in flight.
@@ -59,7 +59,7 @@ export function SessionCreateModal({
       >
         <div className="space-y-2">
           <p className="text-sm font-semibold text-ink">Session 标题</p>
-          <Input onChange={(event) => onTitleChange(event.target.value)} placeholder="例如：文档整理分支" value={title} />
+          <Input onChange={(event) => onTitleChange(event.target.value)} placeholder="例如：文档整理会话" value={title} />
         </div>
 
         <div className="space-y-2">
@@ -74,7 +74,7 @@ export function SessionCreateModal({
         </div>
 
         <div className="space-y-2">
-          <p className="text-sm font-semibold text-ink">主 Agent</p>
+          <p className="text-sm font-semibold text-ink">选择 Agent</p>
           <select
             className="h-12 w-full rounded-3xl border border-line bg-white px-4 text-sm text-ink outline-none transition focus:border-pine/50 focus:ring-4 focus:ring-pine/10"
             onChange={(event) => onAgentChange(event.target.value)}
@@ -87,7 +87,7 @@ export function SessionCreateModal({
               </option>
             ))}
           </select>
-          <p className="text-xs leading-6 text-ink/48">Galaxy 是 task 的默认主会话，不在这里重复选择。这里可以选择 Aries 创建新的 branch session。</p>
+          <p className="text-xs leading-6 text-ink/48">Galaxy 和 Aries 都可以作为单聊模式下的可选 Agent，由你主动创建新的会话。</p>
         </div>
 
         <div className="flex justify-end gap-3 pt-2">

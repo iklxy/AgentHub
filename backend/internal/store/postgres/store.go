@@ -155,6 +155,29 @@ func (s *Store) CreateUser(input domain.RegisterRequest) (domain.User, error) {
 		return domain.User{}, err
 	}
 
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO agents (
+		    id, workspace_id, name, kind, status, description, capability_tags,
+		    source_kind, provider_type, tool_schema_json, created_by, created_at, updated_at
+		  )
+		  VALUES ($1, $2, $3, $4, $5, $6, '[]'::jsonb, $7, $8, '{}'::jsonb, $9, $10, $11)`,
+		generateUUID(),
+		workspaceID,
+		"Aries",
+		"document",
+		"active",
+		"文档 Agent，负责当前工作区下单聊模式的文档整理与改写协作",
+		"external_cli",
+		"claude_code",
+		userID,
+		now,
+		now,
+	)
+	if err != nil {
+		return domain.User{}, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return domain.User{}, err
 	}
@@ -330,7 +353,7 @@ func (s *Store) ListTasks(userID string) ([]domain.Task, error) {
 }
 
 /**
- * CreateTask inserts a task and the default primary session for the authenticated user.
+ * CreateTask inserts one task for the authenticated user without auto-creating any session.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
  * - input: the task title and description values.
@@ -338,11 +361,6 @@ func (s *Store) ListTasks(userID string) ([]domain.Task, error) {
 func (s *Store) CreateTask(userID string, input domain.CreateTaskRequest) (domain.Task, error) {
 	ctx := context.Background()
 	workspace, err := s.GetWorkspaceByUserID(userID)
-	if err != nil {
-		return domain.Task{}, err
-	}
-
-	galaxyAgent, err := s.findAgentByName(ctx, workspace.ID, "Galaxy")
 	if err != nil {
 		return domain.Task{}, err
 	}
@@ -355,7 +373,6 @@ func (s *Store) CreateTask(userID string, input domain.CreateTaskRequest) (domai
 
 	now := time.Now().UTC()
 	taskID := generateUUID()
-	sessionID := generateUUID()
 
 	task := domain.Task{
 		ID:               taskID,
@@ -363,7 +380,7 @@ func (s *Store) CreateTask(userID string, input domain.CreateTaskRequest) (domai
 		Title:            input.Title,
 		Description:      input.Description,
 		Status:           "idle",
-		CurrentSessionID: sessionID,
+		CurrentSessionID: "",
 		UpdatedAtLabel:   "刚刚",
 	}
 
@@ -378,42 +395,11 @@ func (s *Store) CreateTask(userID string, input domain.CreateTaskRequest) (domai
 		task.Title,
 		task.Description,
 		"draft",
-		sessionID,
-		galaxyAgent.ID,
+		nil,
+		nil,
 		userID,
 		now,
 		now,
-	)
-	if err != nil {
-		return domain.Task{}, err
-	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO task_sessions (
-		    id, workspace_id, task_id, title, chat_mode, status, is_pinned, last_active_at,
-		    last_message_preview, primary_agent_id, created_by, created_at, updated_at,
-		    session_kind, created_from_session_id, runtime_provider, runtime_session_key, started_at
-		  )
-		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-		sessionID,
-		task.WorkspaceID,
-		task.ID,
-		"主对话",
-		"single",
-		"active",
-		false,
-		now,
-		"",
-		galaxyAgent.ID,
-		userID,
-		now,
-		now,
-		"primary",
-		nil,
-		"claude_code",
-		sessionID,
-		nil,
 	)
 	if err != nil {
 		return domain.Task{}, err
@@ -490,7 +476,7 @@ func (s *Store) ListSessions(userID string, taskID string) ([]domain.Session, er
 		 INNER JOIN workspace_members wm ON wm.workspace_id = ts.workspace_id
 		 LEFT JOIN agents a ON a.id = ts.primary_agent_id
 		 WHERE wm.user_id = $1 AND ts.task_id = $2 AND ts.status = 'active'
-		 ORDER BY CASE WHEN COALESCE(ts.session_kind, 'primary') = 'primary' THEN 0 ELSE 1 END, ts.last_active_at DESC, ts.created_at ASC`,
+		 ORDER BY ts.last_active_at DESC, ts.created_at ASC`,
 		userID,
 		taskID,
 	)
@@ -561,7 +547,7 @@ func (s *Store) GetSession(userID string, sessionID string) (domain.Session, err
 }
 
 /**
- * CreateSession creates one branch session under a task for the authenticated user.
+ * CreateSession creates one single-chat session under a task for the authenticated user.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
  * - input: the session creation payload.
@@ -580,9 +566,6 @@ func (s *Store) CreateSession(userID string, input domain.CreateSessionRequest) 
 	agentTarget, err := s.findAgentByID(ctx, task.WorkspaceID, input.PrimaryAgentID)
 	if err != nil {
 		return domain.Session{}, err
-	}
-	if strings.EqualFold(agentTarget.Name, "Galaxy") {
-		return domain.Session{}, errors.New("Galaxy is reserved for the default primary session")
 	}
 
 	now := time.Now().UTC()
@@ -653,7 +636,7 @@ func (s *Store) UpdateSession(userID string, sessionID string, input domain.Upda
 }
 
 /**
- * ListSessionAgents returns the enabled non-Galaxy agents that can be used for branch sessions.
+ * ListSessionAgents returns the enabled agents that can be used in the single-chat session creation flow.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
  * - taskID: the task identifier from the request path.
@@ -669,7 +652,7 @@ func (s *Store) ListSessionAgents(userID string, taskID string) ([]domain.AgentO
 		ctx,
 		`SELECT id, name, kind, provider_type
 		 FROM agents
-		 WHERE workspace_id = $1 AND status = 'active' AND LOWER(name) <> 'galaxy'
+		 WHERE workspace_id = $1 AND status = 'active'
 		 ORDER BY name ASC`,
 		task.WorkspaceID,
 	)
