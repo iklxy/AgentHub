@@ -3,15 +3,16 @@
 
 "use client";
 
-import { ArrowRight, CheckCircle2, PenSquare, Sparkles } from "lucide-react";
+import { ArrowRight, Clock3, FolderKanban, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Panel } from "@/components/ui/panel";
-import { Textarea } from "@/components/ui/textarea";
+import { TaskCreateModal } from "@/components/workspace/task-create-modal";
+import { UserSettingsPanel } from "@/components/workspace/user-settings-panel";
+import { WorkspaceEditModal } from "@/components/workspace/workspace-edit-modal";
 import { WorkspaceSidebar } from "@/components/workspace/workspace-sidebar";
 import { createTask, getCurrentUser, getTasks, getWorkspace, updateWorkspace } from "@/lib/api";
 import { clearStoredToken, getStoredToken } from "@/lib/auth";
@@ -31,6 +32,9 @@ export function WorkspacePageClient(): JSX.Element {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState({ name: "", description: "" });
   const [taskDraft, setTaskDraft] = useState({ title: "", description: "" });
+  const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -72,144 +76,142 @@ export function WorkspacePageClient(): JSX.Element {
   }
 
   const firstTask = tasks[0];
+  const runningTaskCount = tasks.filter((task) => task.status === "running").length;
 
   return (
     <main className="min-h-screen bg-mist p-6 text-ink">
       <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
-        <WorkspaceSidebar tasks={tasks} user={currentUser} workspace={workspace} />
+        <WorkspaceSidebar
+          onCreateTask={() => setIsTaskModalOpen(true)}
+          onEditWorkspace={() => setIsWorkspaceModalOpen(true)}
+          onOpenSettings={() => setIsSettingsPanelOpen(true)}
+          tasks={tasks}
+          user={currentUser}
+          workspace={workspace}
+        />
 
-        <section className="grid gap-6">
+        <section className="grid">
           {errorMessage ? <div className="rounded-[24px] border border-ember/20 bg-ember/10 px-5 py-4 text-sm text-ember">{errorMessage}</div> : null}
 
-          <Panel className="overflow-hidden">
-            <div className="grid gap-6 p-8 lg:grid-cols-[1.2fr_0.8fr]">
+          <Panel className="h-full min-h-[calc(100vh-3rem)] p-8">
+            <div className="grid h-full gap-8 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="space-y-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-pine/64">Workspace Hub</p>
-                <h1 className="max-w-2xl font-display text-5xl leading-tight text-ink">任务是入口，聊天是推进方式，工作台才是产品本体。</h1>
-                <p className="max-w-xl text-sm leading-8 text-ink/62">
-                  这里已经接到真实后端接口。工作区信息、任务列表和新建任务动作都会直接写入后端服务与 PostgreSQL。
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  {firstTask ? (
-                    <Link
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-line bg-paper px-5 py-3 text-sm font-semibold text-ink transition duration-200 hover:-translate-y-0.5 hover:border-pine/40 hover:bg-mist"
-                      href={`/workspace/tasks/${firstTask.id}`}
-                    >
-                      进入最近任务
-                      <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  ) : null}
-                  <Button
-                    onClick={() => {
-                      clearStoredToken();
-                      router.push("/login");
-                    }}
-                    variant="secondary"
+                <p className="text-xs uppercase tracking-[0.28em] text-pine/64">Workspace Overview</p>
+                <h1 className="max-w-2xl font-display text-5xl leading-tight text-ink">让任务进入工作台，再让协作自然沉淀成记录与结果物。</h1>
+                {firstTask ? (
+                  <Link
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-line bg-paper px-5 py-3 text-sm font-semibold text-ink transition duration-200 hover:-translate-y-0.5 hover:border-pine/40 hover:bg-mist"
+                    href={`/workspace/tasks/${firstTask.id}`}
                   >
-                    退出登录
+                    进入最近任务
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                ) : (
+                  <Button onClick={() => setIsTaskModalOpen(true)} type="button">
+                    创建第一个任务
                   </Button>
-                </div>
+                )}
               </div>
 
-              <div className="rounded-[30px] border border-line bg-white p-6">
-                <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-pine">
-                  <Sparkles className="h-4 w-4" />
-                  使用路径
-                </div>
-                <div className="space-y-4">
-                  {[
-                    "编辑工作区，让任务边界更清晰",
-                    "创建一个新的 task 并自动分配主 Agent 银河",
-                    "进入 task 后直接和银河对话",
-                  ].map((step) => (
-                    <div className="flex items-start gap-3" key={step}>
-                      <CheckCircle2 className="mt-0.5 h-5 w-5 text-pine" />
-                      <p className="text-sm leading-7 text-ink/65">{step}</p>
+              <div className="grid content-start gap-4 sm:grid-cols-2">
+                {[
+                  {
+                    icon: FolderKanban,
+                    label: "任务总数",
+                    note: "",
+                    value: `${tasks.length}`,
+                  },
+                  {
+                    icon: Sparkles,
+                    label: "运行中",
+                    note: "",
+                    value: `${runningTaskCount}`,
+                  },
+                  {
+                    icon: Clock3,
+                    label: "最近更新",
+                    note: firstTask ? firstTask.title : "等待新任务进入",
+                    value: firstTask?.updatedAtLabel ?? "暂无",
+                  },
+                  {
+                    icon: Sparkles,
+                    label: "当前成员",
+                    note: "",
+                    value: currentUser.username,
+                  },
+                ].map((item) => (
+                  <div className="rounded-[26px] border border-line bg-white p-5" key={item.label}>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-pine">
+                      <item.icon className="h-4 w-4" />
+                      {item.label}
                     </div>
-                  ))}
-                </div>
+                    <p className="mt-5 font-display text-4xl text-ink">{item.value}</p>
+                    <p className="mt-2 text-sm leading-7 text-ink/58">{item.note}</p>
+                  </div>
+                ))}
               </div>
             </div>
           </Panel>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Panel className="p-6">
-              <div className="mb-4 flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-ink/42">
-                <PenSquare className="h-4 w-4" />
-                编辑工作区
-              </div>
-              <form
-                className="space-y-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  setErrorMessage("");
-
-                  startTransition(async () => {
-                    try {
-                      const updatedWorkspace = await updateWorkspace(token, workspaceDraft);
-                      setWorkspaceState(updatedWorkspace);
-                    } catch (error) {
-                      setErrorMessage(error instanceof Error ? error.message : "更新工作区失败");
-                    }
-                  });
-                }}
-              >
-                <Input
-                  onChange={(event) => setWorkspaceDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="工作区名称"
-                  value={workspaceDraft.name}
-                />
-                <Textarea
-                  className="min-h-32"
-                  onChange={(event) => setWorkspaceDraft((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="工作区描述"
-                  value={workspaceDraft.description}
-                />
-                <Button disabled={isPending} type="submit">
-                  {isPending ? "保存中..." : "保存工作区"}
-                </Button>
-              </form>
-            </Panel>
-
-            <Panel className="p-6">
-              <p className="text-xs uppercase tracking-[0.22em] text-ink/42">新建任务</p>
-              <form
-                className="mt-4 space-y-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  setErrorMessage("");
-
-                  startTransition(async () => {
-                    try {
-                      const createdTask = await createTask(token, taskDraft);
-                      setTasks((current) => [createdTask, ...current]);
-                      setTaskDraft({ title: "", description: "" });
-                      router.push(`/workspace/tasks/${createdTask.id}`);
-                    } catch (error) {
-                      setErrorMessage(error instanceof Error ? error.message : "新建任务失败");
-                    }
-                  });
-                }}
-              >
-                <Input
-                  onChange={(event) => setTaskDraft((current) => ({ ...current, title: event.target.value }))}
-                  placeholder="任务标题"
-                  value={taskDraft.title}
-                />
-                <Textarea
-                  className="min-h-32"
-                  onChange={(event) => setTaskDraft((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="任务描述"
-                  value={taskDraft.description}
-                />
-                <Button disabled={isPending} type="submit">
-                  {isPending ? "创建中..." : "创建任务"}
-                </Button>
-              </form>
-            </Panel>
-          </div>
         </section>
       </div>
+
+      <WorkspaceEditModal
+        description={workspaceDraft.description}
+        isOpen={isWorkspaceModalOpen}
+        isSubmitting={isPending}
+        name={workspaceDraft.name}
+        onClose={() => setIsWorkspaceModalOpen(false)}
+        onDescriptionChange={(value) => setWorkspaceDraft((current) => ({ ...current, description: value }))}
+        onNameChange={(value) => setWorkspaceDraft((current) => ({ ...current, name: value }))}
+        onSubmit={() => {
+          setErrorMessage("");
+
+          startTransition(async () => {
+            try {
+              const updatedWorkspace = await updateWorkspace(token, workspaceDraft);
+              setWorkspaceState(updatedWorkspace);
+              setIsWorkspaceModalOpen(false);
+            } catch (error) {
+              setErrorMessage(error instanceof Error ? error.message : "更新工作区失败");
+            }
+          });
+        }}
+      />
+
+      <TaskCreateModal
+        description={taskDraft.description}
+        isOpen={isTaskModalOpen}
+        isSubmitting={isPending}
+        onClose={() => setIsTaskModalOpen(false)}
+        onDescriptionChange={(value) => setTaskDraft((current) => ({ ...current, description: value }))}
+        onSubmit={() => {
+          setErrorMessage("");
+
+          startTransition(async () => {
+            try {
+              const createdTask = await createTask(token, taskDraft);
+              setTasks((current) => [createdTask, ...current]);
+              setTaskDraft({ title: "", description: "" });
+              setIsTaskModalOpen(false);
+              router.push(`/workspace/tasks/${createdTask.id}`);
+            } catch (error) {
+              setErrorMessage(error instanceof Error ? error.message : "新建任务失败");
+            }
+          });
+        }}
+        onTitleChange={(value) => setTaskDraft((current) => ({ ...current, title: value }))}
+        title={taskDraft.title}
+      />
+
+      <UserSettingsPanel
+        isOpen={isSettingsPanelOpen}
+        onClose={() => setIsSettingsPanelOpen(false)}
+        onLogout={() => {
+          clearStoredToken();
+          router.push("/login");
+        }}
+        user={currentUser}
+      />
     </main>
   );
 }

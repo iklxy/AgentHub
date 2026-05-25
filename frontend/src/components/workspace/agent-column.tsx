@@ -36,15 +36,7 @@ export function AgentColumn({ conversation }: { conversation: Conversation }): J
                 Main
               </span>
             </div>
-            <p className="text-sm leading-7 text-ink/62">{conversation.summary}</p>
           </div>
-        </div>
-        <div className="mt-4 rounded-2xl border border-line bg-mist px-3 py-3 text-xs leading-6 text-ink/60">
-          <div className="mb-1 flex items-center gap-2 font-semibold text-ink/70">
-            <Sparkles className="h-4 w-4 text-pine" />
-            当前能力
-          </div>
-          围绕当前 task 理解上下文、回答问题，并把后续多 Agent 扩展的结构预留在同一个工作台中。
         </div>
       </article>
     </Panel>

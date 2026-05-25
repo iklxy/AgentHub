@@ -73,8 +73,8 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-mist p-6 text-ink">
-      <div className="grid gap-6 xl:grid-cols-[320px_280px_1fr]">
+    <main className="h-screen overflow-hidden bg-mist p-6 text-ink">
+      <div className="grid h-full gap-6 xl:grid-cols-[320px_280px_1fr]">
         <WorkspaceSidebar activeTaskId={task.id} tasks={tasks} user={currentUser} workspace={workspace} />
         <AgentColumn conversation={conversation} />
         <ChatColumn

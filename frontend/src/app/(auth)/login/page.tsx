@@ -14,8 +14,8 @@ export default function LoginPage(): JSX.Element {
       footerCta="去注册"
       footerHref="/register"
       footerLabel="还没有账号？"
-      subtitle="进入你的协作工作区，继续围绕 task 与主 Agent 银河推进任务。"
-      title="登录 AgentHub"
+      subtitle="进入AgentHub，开启你的智能体协作之旅。"
+      title="登录"
     >
       <AuthForm mode="login" />
     </AuthShell>

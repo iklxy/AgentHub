@@ -4,7 +4,7 @@
 "use client";
 
 import { ArrowUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,6 +26,17 @@ export function ChatInput({
   onSend: (value: string) => void;
 }): JSX.Element {
   const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
+  }, [value]);
 
   return (
     <form
@@ -43,7 +54,7 @@ export function ChatInput({
       }}
     >
       <Textarea
-        className="min-h-28 resize-none border-none p-0 focus:ring-0"
+        className="h-11 min-h-0 max-h-48 resize-none overflow-y-auto border-none p-0 leading-7 focus:ring-0"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
@@ -57,10 +68,11 @@ export function ChatInput({
           }
         }}
         placeholder={placeholder}
+        ref={textareaRef}
+        rows={1}
         value={value}
       />
       <div className="mt-4 flex items-center justify-between">
-        <p className="text-xs uppercase tracking-[0.16em] text-ink/36">Enter 发送 · Shift + Enter 换行</p>
         <Button className="h-12 w-12 rounded-full p-0" disabled={isSending || value.trim().length === 0} size="icon" type="submit">
           <ArrowUp className="h-4 w-4" />
         </Button>

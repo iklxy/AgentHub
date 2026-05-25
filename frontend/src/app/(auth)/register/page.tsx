@@ -14,8 +14,8 @@ export default function RegisterPage(): JSX.Element {
       footerCta="去登录"
       footerHref="/login"
       footerLabel="已经有账号？"
-      subtitle="先创建你的账号，再进入 AgentHub 的任务工作区。"
-      title="注册 AgentHub"
+      subtitle=""
+      title="注册"
     >
       <AuthForm mode="register" />
     </AuthShell>

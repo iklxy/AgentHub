@@ -33,8 +33,8 @@ export function ChatColumn({
   onSendMessage: (content: string) => void;
 }): JSX.Element {
   return (
-    <Panel className="flex min-h-[calc(100vh-3rem)] flex-col overflow-hidden">
-      <header className="border-b border-line px-7 py-6">
+    <Panel className="flex h-full min-h-0 flex-col overflow-hidden">
+      <header className="shrink-0 border-b border-line px-7 py-3">
         <div className="mb-4 flex items-center justify-between gap-4">
           <Link className="inline-flex items-center gap-2 text-sm text-ink/56 transition hover:text-pine" href="/workspace">
             <ArrowLeft className="h-4 w-4" />
@@ -42,19 +42,15 @@ export function ChatColumn({
           </Link>
           <StatusBadge status={task.status} />
         </div>
-        <div className="space-y-2">
-          <h1 className="font-display text-3xl text-ink">{task.title}</h1>
-          <p className="max-w-3xl text-sm leading-7 text-ink/66">{task.description}</p>
-        </div>
       </header>
 
-      <div className="flex-1 space-y-5 overflow-y-auto px-7 py-6">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-7 py-6">
         {messages.length === 0 ? (
           <div className="flex h-full min-h-[320px] items-center justify-center">
             <div className="max-w-md space-y-3 text-center">
               <p className="text-xs uppercase tracking-[0.3em] text-ink/40">Ready</p>
-              <h2 className="font-display text-3xl text-ink">从第一条消息开始，让银河进入这个 task。</h2>
-              <p className="text-sm leading-7 text-ink/58">当前任务已经建好，主 Agent 会基于 task 标题、描述和历史消息继续回答。</p>
+              <h2 className="font-display text-3xl text-ink">从第一条消息开始</h2>
+              <p className="text-sm leading-7 text-ink/58">当前任务已经建好</p>
             </div>
           </div>
         ) : (
@@ -62,10 +58,7 @@ export function ChatColumn({
         )}
       </div>
 
-      <div className="border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
-        <div className="mb-3 text-xs uppercase tracking-[0.16em] text-ink/40">
-          {isSending ? "银河正在思考..." : "银河正在等待你的下一步指令"}
-        </div>
+      <div className="shrink-0 border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}
         <ChatInput isSending={isSending} onSend={onSendMessage} placeholder="围绕当前任务继续提问，例如：帮我拆成 3 个学习阶段。" />
       </div>
