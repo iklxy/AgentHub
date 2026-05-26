@@ -21,5 +21,7 @@ type Repository interface {
 	UpdateSession(userID string, sessionID string, input domain.UpdateSessionRequest) (domain.Session, error)
 	ListSessionAgents(userID string, taskID string) ([]domain.AgentOption, error)
 	ListMessages(userID string, taskID string, sessionID string) ([]domain.Message, error)
-	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string) (domain.Message, domain.Message, error)
+	GetMessageByID(userID string, messageID string) (domain.Message, error)
+	GetMessagesByIDs(userID string, messageIDs []string) ([]domain.Message, error)
+	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string) (domain.Message, domain.Message, error)
 }

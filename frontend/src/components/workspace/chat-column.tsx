@@ -1,5 +1,9 @@
-// Date: 2026-05-25
+// Date: 2026-05-27
 // Author: XinYang Li
+
+"use client";
+
+import { useEffect, useRef } from "react";
 
 import { StatusBadge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
@@ -12,6 +16,10 @@ import type { Message, Session, Task } from "@/types/domain";
  * @param props.errorMessage Optional status text shown above the input area.
  * @param props.isSending Whether the current task session is waiting for an assistant reply.
  * @param props.messages The ordered message list rendered inside the transcript.
+ * @param props.messageOperation Optional active quote or reply context for the composer.
+ * @param props.onClearMessageOperation Clears the active quote or reply context.
+ * @param props.onQuoteMessage Starts a quote action from one transcript message.
+ * @param props.onReplyMessage Starts a reply action from one transcript message.
  * @param props.onSendMessage The callback executed when the user submits a message.
  * @param props.session The active task session displayed in this chat column.
  * @param props.task The active task that owns the current session.
@@ -21,6 +29,10 @@ export function ChatColumn({
   errorMessage,
   isSending,
   messages,
+  messageOperation,
+  onClearMessageOperation,
+  onQuoteMessage,
+  onReplyMessage,
   onSendMessage,
   session,
   task,
@@ -28,10 +40,26 @@ export function ChatColumn({
   errorMessage?: string;
   isSending: boolean;
   messages: Message[];
+  messageOperation?: {
+    mode: "quote" | "reply";
+    messages: Message[];
+  } | null;
+  onClearMessageOperation?: () => void;
+  onQuoteMessage: (message: Message) => void;
+  onReplyMessage: (message: Message) => void;
   onSendMessage: (content: string) => void;
   session: Session;
   task: Task;
 }): JSX.Element {
+  const endAnchorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    endAnchorRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [messages, session.id]);
+
   return (
     <Panel className="flex h-full min-h-0 flex-col overflow-hidden">
       <header className="shrink-0 border-b border-line px-7 py-5">
@@ -61,13 +89,34 @@ export function ChatColumn({
             </div>
           </div>
         ) : (
-          messages.map((message) => <MessageBubble key={message.id} message={message} />)
+          messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onQuote={onQuoteMessage}
+              onReply={onReplyMessage}
+            />
+          ))
         )}
+        <div aria-hidden="true" ref={endAnchorRef} />
       </div>
 
       <div className="shrink-0 border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}
-        <ChatInput isSending={isSending} onSend={onSendMessage} placeholder={`继续围绕「${session.title}」发消息，例如：把这个会话拆成更细的执行步骤。`} />
+        <ChatInput
+          isSending={isSending}
+          operationHint={
+            messageOperation
+              ? {
+                  mode: messageOperation.mode,
+                  sourceContents: messageOperation.messages.map((message) => message.content),
+                }
+              : null
+          }
+          onClearOperation={onClearMessageOperation}
+          onSend={onSendMessage}
+          placeholder={`继续围绕「${session.title}」发消息，例如：把这个会话拆成更细的执行步骤。`}
+        />
       </div>
     </Panel>
   );

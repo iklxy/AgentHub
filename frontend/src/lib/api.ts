@@ -45,6 +45,11 @@ type CreateMessagePayload = {
   content: string;
 };
 
+type CreateMessageActionPayload = {
+  content: string;
+  messageIds?: string[];
+};
+
 type AuthResponse = {
   token: string;
   user: User;
@@ -266,6 +271,35 @@ export function getMessages(token: string, taskId: string, sessionId: string): P
  */
 export function createMessage(token: string, taskId: string, payload: CreateMessagePayload): Promise<MessageRoundResponse> {
   return request<MessageRoundResponse>(`/api/tasks/${taskId}/messages`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Creates a quote-based message round from one source message.
+ * @param token The bearer token stored in the browser.
+ * @param payload The user input plus source message identifiers selected in the transcript.
+ * @returns The created user and assistant message pair.
+ */
+export function quoteMessage(token: string, payload: CreateMessageActionPayload): Promise<MessageRoundResponse> {
+  return request<MessageRoundResponse>("/api/messages/quote", {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Creates a reply-based message round from one source message.
+ * @param token The bearer token stored in the browser.
+ * @param messageId The source message identifier selected in the transcript.
+ * @param payload The user input that should reply to the selected message.
+ * @returns The created user and assistant message pair.
+ */
+export function replyMessage(token: string, messageId: string, payload: CreateMessageActionPayload): Promise<MessageRoundResponse> {
+  return request<MessageRoundResponse>(`/api/messages/${messageId}/reply`, {
     method: "POST",
     token,
     body: JSON.stringify(payload),

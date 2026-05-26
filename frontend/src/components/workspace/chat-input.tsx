@@ -7,22 +7,32 @@ import { ArrowUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { MarkdownContent } from "@/components/workspace/markdown-content";
 import { Textarea } from "@/components/ui/textarea";
 
 /**
  * Renders the fixed chat composer for the task workspace.
  * @param props.placeholder The prompt hint shown inside the textarea.
  * @param props.isSending Whether the current request is already in flight.
+ * @param props.operationHint Optional active quote or reply context shown above the composer.
+ * @param props.onClearOperation Clears the active quote or reply context.
  * @param props.onSend The callback executed after the user submits a new message.
  * @returns The interactive chat input block.
  */
 export function ChatInput({
   placeholder,
   isSending,
+  operationHint,
+  onClearOperation,
   onSend,
 }: {
   placeholder: string;
   isSending: boolean;
+  operationHint?: {
+    mode: "quote" | "reply";
+    sourceContents: string[];
+  } | null;
+  onClearOperation?: () => void;
   onSend: (value: string) => void;
 }): JSX.Element {
   const [value, setValue] = useState("");
@@ -71,6 +81,37 @@ export function ChatInput({
         setValue("");
       }}
     >
+      {operationHint ? (
+        <div className="mb-4 rounded-[22px] border border-line bg-mist/70 px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.16em] text-pine">
+                {operationHint.mode === "quote" ? `引用消息 ${operationHint.sourceContents.length}` : "回复当前消息"}
+              </p>
+              <div className="mt-2 space-y-2">
+                {operationHint.sourceContents.map((sourceContent, index) => (
+                  <div className="rounded-2xl border border-line/70 bg-white/70 px-3 py-2" key={`${sourceContent}-${index}`}>
+                    <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-ink/42">
+                      {operationHint.mode === "quote" ? `引用消息 ${index + 1}` : "回复消息"}
+                    </p>
+                    <MarkdownContent
+                      content={sourceContent}
+                      inlineCodeClassName="rounded-md bg-ink/6 px-1.5 py-0.5 font-mono text-[13px] text-ink"
+                      paragraphClassName="whitespace-pre-wrap text-sm leading-6 text-ink/62"
+                      tableClassName="overflow-x-auto rounded-2xl border border-line/70 bg-white/75"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            {onClearOperation ? (
+              <Button onClick={onClearOperation} size="sm" type="button" variant="ghost">
+                取消
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <Textarea
         className="h-11 min-h-0 max-h-48 resize-none overflow-y-auto border-none p-0 leading-7 focus:ring-0"
         onChange={(event) => setValue(event.target.value)}

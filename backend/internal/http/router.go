@@ -26,13 +26,31 @@ func NewRouter(logger *slog.Logger, handlers *Handlers) http.Handler {
 	mux.HandleFunc("GET /api/tasks", handlers.ListTasks)
 	mux.HandleFunc("POST /api/tasks", handlers.CreateTask)
 	mux.HandleFunc("GET /api/agents", handlers.ListAgents)
+	mux.HandleFunc("POST /api/messages/quote", handlers.CreateQuotedMessage)
 	mux.HandleFunc("POST /api/sessions", handlers.CreateSession)
 	mux.HandleFunc("GET /api/sessions/", routeSessionResources(handlers))
 	mux.HandleFunc("PATCH /api/sessions/", routeSessionResources(handlers))
+	mux.HandleFunc("POST /api/messages/", routeMessageResources(handlers))
 	mux.HandleFunc("GET /api/tasks/", routeTaskSubresources(handlers))
 	mux.HandleFunc("POST /api/tasks/", routeTaskSubresources(handlers))
 
 	return RequestLogging(logger, mux)
+}
+
+/**
+ * routeMessageResources dispatches /api/messages/{messageId}/{action} requests by method.
+ * Params:
+ * - handlers: the shared handler collection used for the message action routes.
+ */
+func routeMessageResources(handlers *Handlers) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodPost:
+			handlers.CreateMessageFromAction(writer, request)
+		default:
+			WriteError(writer, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
 }
 
 /**

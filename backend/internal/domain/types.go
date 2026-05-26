@@ -68,6 +68,7 @@ type Message struct {
 	Content   string `json:"content"`
 	Status    string `json:"status"`
 	TimeLabel string `json:"timeLabel"`
+	ReplyToID string `json:"replyToMessageId"`
 }
 
 // LoginRequest carries the login payload.
@@ -114,4 +115,10 @@ type UpdateSessionRequest struct {
 type CreateMessageRequest struct {
 	SessionID string `json:"sessionId"`
 	Content   string `json:"content"`
+}
+
+// CreateDerivedMessageRequest carries user input for quote and reply message actions.
+type CreateDerivedMessageRequest struct {
+	Content    string   `json:"content"`
+	MessageIDs []string `json:"messageIds"`
 }

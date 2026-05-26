@@ -6,6 +6,7 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -574,7 +575,7 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent, nil)
 	if err != nil {
 		h.logFailure(request, "message_create_store_pair", err, "userId", userID, "taskId", taskID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -586,6 +587,222 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		"userMessage":      userMessage,
 		"assistantMessage": assistantMessage,
 	})
+}
+
+/**
+ * CreateQuotedMessage executes one derived quote message round against multiple source messages.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that carries the quote payload.
+ */
+func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "message_quote_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	var input domain.CreateDerivedMessageRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		h.logFailure(request, "message_quote_decode", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, "invalid quote payload")
+		return
+	}
+
+	trimmedUserContent := strings.TrimSpace(input.Content)
+	if trimmedUserContent == "" {
+		WriteError(writer, http.StatusBadRequest, "content is required")
+		return
+	}
+
+	if len(input.MessageIDs) == 0 {
+		WriteError(writer, http.StatusBadRequest, "messageIds are required")
+		return
+	}
+
+	sourceMessages, err := h.Store.GetMessagesByIDs(userID, input.MessageIDs)
+	if err != nil {
+		h.logFailure(request, "message_quote_get_sources", err, "userId", userID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	baseMessage := sourceMessages[0]
+	task, err := h.Store.GetTask(userID, baseMessage.TaskID)
+	if err != nil {
+		h.logFailure(request, "message_quote_get_task", err, "userId", userID, "taskId", baseMessage.TaskID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	session, err := h.Store.GetSession(userID, baseMessage.SessionID)
+	if err != nil {
+		h.logFailure(request, "message_quote_get_session", err, "userId", userID, "sessionId", baseMessage.SessionID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	for _, sourceMessage := range sourceMessages[1:] {
+		if sourceMessage.TaskID != task.ID || sourceMessage.SessionID != session.ID {
+			WriteError(writer, http.StatusBadRequest, "quoted messages must belong to the same session")
+			return
+		}
+	}
+
+	composedPrompt := buildQuotedPrompt(sourceMessages, trimmedUserContent)
+	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	if err != nil {
+		h.logFailure(
+			request,
+			"message_quote_run_agent",
+			err,
+			"userId", userID,
+			"taskId", task.ID,
+			"sessionId", session.ID,
+		)
+		if errors.Is(err, agent.ErrRuntimeNotImplemented) {
+			WriteError(writer, http.StatusNotImplemented, err.Error())
+			return
+		}
+		WriteError(writer, http.StatusBadGateway, "agent execution failed")
+		return
+	}
+
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, nil)
+	if err != nil {
+		h.logFailure(request, "message_quote_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusCreated, map[string]domain.Message{
+		"userMessage":      userMessage,
+		"assistantMessage": assistantMessage,
+	})
+}
+
+/**
+ * CreateMessageFromAction executes reply message creation against one source message.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that carries the reply payload and message route.
+ */
+func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "message_reply_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	messageID, action, err := parseMessageActionRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "message_reply_parse_route", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if action != "reply" {
+		WriteError(writer, http.StatusBadRequest, "invalid message action")
+		return
+	}
+
+	var input domain.CreateDerivedMessageRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		h.logFailure(request, "message_reply_decode", err, "userId", userID, "messageId", messageID)
+		WriteError(writer, http.StatusBadRequest, "invalid reply payload")
+		return
+	}
+
+	sourceMessage, err := h.Store.GetMessageByID(userID, messageID)
+	if err != nil {
+		h.logFailure(request, "message_reply_get_source", err, "userId", userID, "messageId", messageID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	task, err := h.Store.GetTask(userID, sourceMessage.TaskID)
+	if err != nil {
+		h.logFailure(request, "message_reply_get_task", err, "userId", userID, "taskId", sourceMessage.TaskID, "messageId", messageID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	session, err := h.Store.GetSession(userID, sourceMessage.SessionID)
+	if err != nil {
+		h.logFailure(request, "message_reply_get_session", err, "userId", userID, "sessionId", sourceMessage.SessionID, "messageId", messageID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	trimmedUserContent := strings.TrimSpace(input.Content)
+	if trimmedUserContent == "" {
+		WriteError(writer, http.StatusBadRequest, "content is required")
+		return
+	}
+
+	composedPrompt, replyToMessageID := buildReplyPrompt(sourceMessage, trimmedUserContent)
+	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	if err != nil {
+		h.logFailure(
+			request,
+			"message_reply_run_agent",
+			err,
+			"userId", userID,
+			"taskId", task.ID,
+			"sessionId", session.ID,
+			"sourceMessageId", sourceMessage.ID,
+		)
+		if errors.Is(err, agent.ErrRuntimeNotImplemented) {
+			WriteError(writer, http.StatusNotImplemented, err.Error())
+			return
+		}
+		WriteError(writer, http.StatusBadGateway, "agent execution failed")
+		return
+	}
+
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, replyToMessageID)
+	if err != nil {
+		h.logFailure(request, "message_reply_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusCreated, map[string]domain.Message{
+		"userMessage":      userMessage,
+		"assistantMessage": assistantMessage,
+	})
+}
+
+/**
+ * buildQuotedPrompt creates the agent-facing prompt for one multi-message quote action.
+ * Params:
+ * - sourceMessages: the quoted messages selected by the user in display order.
+ * - userContent: the raw user input typed in the composer.
+ * Returns:
+ * - the composed prompt sent to the active agent.
+ */
+func buildQuotedPrompt(sourceMessages []domain.Message, userContent string) string {
+	segments := make([]string, 0, len(sourceMessages))
+	for index, sourceMessage := range sourceMessages {
+		segments = append(segments, fmt.Sprintf("引用消息%d：%s", index+1, sourceMessage.Content))
+	}
+
+	return fmt.Sprintf("以下是前文中的多个上下文片段：\n%s\n\n请结合这些上下文回答用户的新问题：\n%s", strings.Join(segments, "\n"), userContent)
+}
+
+/**
+ * buildReplyPrompt creates the agent-facing prompt for one reply action.
+ * Params:
+ * - sourceMessage: the source message selected by the user.
+ * - userContent: the raw user input typed in the composer.
+ * Returns:
+ * - the composed prompt sent to the active agent and the reply target identifier.
+ */
+func buildReplyPrompt(sourceMessage domain.Message, userContent string) (string, *string) {
+	replyToID := sourceMessage.ID
+	return fmt.Sprintf("请基于以下消息继续回答：\n%s\n\n用户回复内容：\n%s", sourceMessage.Content, userContent), &replyToID
 }
 
 /**
@@ -620,6 +837,22 @@ func parseSessionRoute(path string) (string, error) {
 		return "", errorsNew("session id is required")
 	}
 	return sessionID, nil
+}
+
+/**
+ * parseMessageActionRoute extracts the message identifier and action from /api/messages/{messageId}/{action}.
+ * Params:
+ * - path: the request path that starts with /api/messages/.
+ */
+func parseMessageActionRoute(path string) (string, string, error) {
+	trimmed := strings.TrimPrefix(path, "/api/messages/")
+	segments := strings.Split(strings.Trim(trimmed, "/"), "/")
+
+	if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
+		return "", "", errorsNew("message id and action are required")
+	}
+
+	return segments[0], segments[1], nil
 }
 
 /**

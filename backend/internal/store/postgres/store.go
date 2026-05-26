@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -744,7 +745,7 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 	ctx := context.Background()
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
 		 FROM messages m
 		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
 		 WHERE wm.user_id = $1 AND m.task_id = $2 AND m.session_id = $3
@@ -762,7 +763,7 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 	for rows.Next() {
 		var message domain.Message
 		var createdAt time.Time
-		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt); err != nil {
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID); err != nil {
 			return nil, err
 		}
 		message.Status = "success"
@@ -774,6 +775,96 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 }
 
 /**
+ * GetMessageByID loads one message the current user can access.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - messageID: the message identifier selected by the front-end action.
+ * Returns:
+ * - the resolved message entity for quote and reply actions.
+ */
+func (s *Store) GetMessageByID(userID string, messageID string) (domain.Message, error) {
+	ctx := context.Background()
+	var message domain.Message
+	var createdAt time.Time
+
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
+		 FROM messages m
+		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
+		 WHERE wm.user_id = $1 AND m.id = $2
+		 LIMIT 1`,
+		userID,
+		messageID,
+	).Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Message{}, errors.New("message not found")
+		}
+		return domain.Message{}, err
+	}
+
+	message.Status = "success"
+	message.TimeLabel = createdAt.Local().Format("15:04")
+	return message, nil
+}
+
+/**
+ * GetMessagesByIDs loads multiple messages the current user can access.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - messageIDs: the source message identifiers selected by the front-end quote action.
+ * Returns:
+ * - the resolved message list in the same order as the incoming identifiers.
+ */
+func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.Message, error) {
+	ctx := context.Background()
+	if len(messageIDs) == 0 {
+		return nil, errors.New("message ids are required")
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
+		 FROM messages m
+		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
+		 WHERE wm.user_id = $1 AND m.id = ANY($2)`,
+		userID,
+		messageIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byID := make(map[string]domain.Message, len(messageIDs))
+	for rows.Next() {
+		var message domain.Message
+		var createdAt time.Time
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID); err != nil {
+			return nil, err
+		}
+		message.Status = "success"
+		message.TimeLabel = createdAt.Local().Format("15:04")
+		byID[message.ID] = message
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	orderedMessages := make([]domain.Message, 0, len(messageIDs))
+	for _, messageID := range messageIDs {
+		message, ok := byID[messageID]
+		if !ok {
+			return nil, errors.New("one or more messages were not found")
+		}
+		orderedMessages = append(orderedMessages, message)
+	}
+
+	return slices.Clone(orderedMessages), nil
+}
+
+/**
  * CreateMessagePair stores the user message and assistant reply for one task session round.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
@@ -781,8 +872,9 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
  * - sessionID: the session identifier bound to the active chat view.
  * - userContent: the user message content.
  * - assistantContent: the assistant reply content.
+ * - replyToMessageID: the replied source message identifier when the new user message is a reply action.
  */
-func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string) (domain.Message, domain.Message, error) {
+func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string) (domain.Message, domain.Message, error) {
 	ctx := context.Background()
 	task, err := s.GetTask(userID, taskID)
 	if err != nil {
@@ -813,6 +905,9 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		Status:    "success",
 		TimeLabel: now.Local().Format("15:04"),
 	}
+	if replyToMessageID != nil {
+		userMessage.ReplyToID = *replyToMessageID
+	}
 
 	assistantMessage := domain.Message{
 		ID:        generateUUID(),
@@ -828,9 +923,9 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		ctx,
 		`INSERT INTO messages (
 		    id, workspace_id, task_id, session_id, sender_type, sender_id, role,
-		    message_type, content_md, created_at
+		    message_type, content_md, reply_to_message_id, created_at
 		  )
-		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid, $11)`,
 		userMessage.ID,
 		task.WorkspaceID,
 		taskID,
@@ -840,6 +935,7 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		"user",
 		"text",
 		userContent,
+		userMessage.ReplyToID,
 		now,
 	)
 	if err != nil {

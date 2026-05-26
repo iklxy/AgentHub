@@ -23,6 +23,8 @@ import {
   getTask,
   getTasks,
   getWorkspace,
+  quoteMessage,
+  replyMessage,
   updateSession,
 } from "@/lib/api";
 import { clearStoredToken, getStoredToken } from "@/lib/auth";
@@ -60,7 +62,17 @@ function buildOptimisticUserMessage(taskId: string, sessionId: string, content: 
     role: "user",
     content,
     timeLabel: "刚刚",
+    replyToMessageId: "",
   };
+}
+
+/**
+ * Normalizes a message excerpt for compact quote and reply previews.
+ * @param content The raw message content.
+ * @returns The shortened single-line preview text.
+ */
+function buildMessagePreview(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 /**
@@ -84,6 +96,10 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
   const [isCreateSessionOpen, setIsCreateSessionOpen] = useState(false);
   const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
   const [pendingArchiveSession, setPendingArchiveSession] = useState<Session | null>(null);
+  const [messageOperation, setMessageOperation] = useState<{
+    mode: "quote" | "reply";
+    messages: Message[];
+  } | null>(null);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [sessionDraft, setSessionDraft] = useState({
     title: "",
@@ -182,6 +198,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
           onSelectSession={(sessionId) => {
             setErrorMessage("");
             setMessages([]);
+            setMessageOperation(null);
             setActiveSessionId(sessionId);
           }}
           onTogglePin={(sessionId, nextPinned) => {
@@ -222,16 +239,26 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             messages={messages}
             onSendMessage={(content) => {
               setErrorMessage("");
+              const currentMessageOperation = messageOperation;
               const optimisticMessage = buildOptimisticUserMessage(task.id, activeSession.id, content);
 
               setMessages((current) => [...current, optimisticMessage]);
+              setMessageOperation(null);
 
               startTransition(async () => {
                 try {
-                  const response = await createMessage(token, task.id, {
-                    sessionId: activeSession.id,
-                    content,
-                  });
+                  const response =
+                    currentMessageOperation?.mode === "quote"
+                      ? await quoteMessage(token, {
+                          content,
+                          messageIds: currentMessageOperation.messages.map((message) => message.id),
+                        })
+                      : currentMessageOperation?.mode === "reply"
+                        ? await replyMessage(token, currentMessageOperation.messages[0].id, { content })
+                        : await createMessage(token, task.id, {
+                            sessionId: activeSession.id,
+                            content,
+                          });
 
                   setMessages((current) => [
                     ...current.filter((item) => item.id !== optimisticMessage.id),
@@ -279,6 +306,41 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                   setMessages((current) => current.filter((item) => item.id !== optimisticMessage.id));
                   setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
                 }
+              });
+            }}
+            messageOperation={messageOperation}
+            onClearMessageOperation={() => setMessageOperation(null)}
+            onQuoteMessage={(message) => {
+              setMessageOperation((current) => {
+                const normalizedMessage = {
+                  ...message,
+                  content: buildMessagePreview(message.content),
+                };
+
+                if (!current || current.mode !== "quote") {
+                  return {
+                    mode: "quote",
+                    messages: [normalizedMessage],
+                  };
+                }
+
+                if (current.messages.some((item) => item.id === message.id)) {
+                  return current;
+                }
+
+                return {
+                  mode: "quote",
+                  messages: [...current.messages, normalizedMessage],
+                };
+              });
+            }}
+            onReplyMessage={(message) => {
+              setMessageOperation({
+                mode: "reply",
+                messages: [{
+                  ...message,
+                  content: buildMessagePreview(message.content),
+                }],
               });
             }}
             session={activeSession}

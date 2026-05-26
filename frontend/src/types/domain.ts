@@ -64,4 +64,5 @@ export type Message = {
   role: MessageRole;
   content: string;
   timeLabel: string;
+  replyToMessageId: string;
 };
