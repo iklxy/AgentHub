@@ -7,9 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lixinyang/agenthub/backend/internal/agent"
 	"github.com/lixinyang/agenthub/backend/internal/domain"
@@ -507,6 +512,165 @@ func (h *Handlers) GetMessages(writer http.ResponseWriter, request *http.Request
 }
 
 /**
+ * UploadFiles stores uploaded files or images for one task session before the next message send binds them.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the multipart upload request that carries files, taskId, sessionId, and sourceType.
+ */
+func (h *Handlers) UploadFiles(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "files_upload_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	if err := request.ParseMultipartForm(128 << 20); err != nil {
+		h.logFailure(request, "files_upload_parse_form", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, "invalid upload payload")
+		return
+	}
+
+	taskID := strings.TrimSpace(request.FormValue("taskId"))
+	sessionID := strings.TrimSpace(request.FormValue("sessionId"))
+	sourceType := normalizeAttachmentSourceType(request.FormValue("sourceType"))
+	if taskID == "" || sessionID == "" {
+		WriteError(writer, http.StatusBadRequest, "taskId and sessionId are required")
+		return
+	}
+	if sourceType == "" {
+		WriteError(writer, http.StatusBadRequest, "sourceType must be image or file")
+		return
+	}
+
+	task, err := h.Store.GetTask(userID, taskID)
+	if err != nil {
+		h.logFailure(request, "files_upload_get_task", err, "userId", userID, "taskId", taskID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	session, err := h.Store.GetSession(userID, sessionID)
+	if err != nil {
+		h.logFailure(request, "files_upload_get_session", err, "userId", userID, "sessionId", sessionID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+	if session.TaskID != task.ID {
+		WriteError(writer, http.StatusBadRequest, "session does not belong to the task")
+		return
+	}
+
+	fileHeaders := request.MultipartForm.File["files"]
+	if len(fileHeaders) == 0 {
+		WriteError(writer, http.StatusBadRequest, "files are required")
+		return
+	}
+
+	attachments := make([]domain.Attachment, 0, len(fileHeaders))
+	for _, fileHeader := range fileHeaders {
+		openedFile, err := fileHeader.Open()
+		if err != nil {
+			h.logFailure(request, "files_upload_open_file", err, "userId", userID, "sessionId", sessionID, "fileName", fileHeader.Filename)
+			WriteError(writer, http.StatusBadRequest, "failed to read upload file")
+			return
+		}
+
+		detectedType, detectErr := detectUploadedFileType(openedFile, fileHeader.Header.Get("Content-Type"))
+		if detectErr != nil {
+			openedFile.Close()
+			h.logFailure(request, "files_upload_detect_type", detectErr, "userId", userID, "fileName", fileHeader.Filename)
+			WriteError(writer, http.StatusBadRequest, "failed to detect upload file type")
+			return
+		}
+
+		resolvedSourceType := sourceType
+		if strings.HasPrefix(strings.ToLower(detectedType), "image/") {
+			resolvedSourceType = "image"
+		}
+
+		assetDir, err := h.AgentService.EnsureSessionAssetDir(session, resolvedSourceType)
+		if err != nil {
+			openedFile.Close()
+			h.logFailure(request, "files_upload_prepare_dir", err, "userId", userID, "sessionId", sessionID, "sourceType", resolvedSourceType)
+			WriteError(writer, http.StatusInternalServerError, "failed to prepare upload directory")
+			return
+		}
+
+		safeFileName := sanitizeUploadedFileName(fileHeader.Filename)
+		storagePath := filepath.Join(assetDir, buildStoredFileName(safeFileName))
+		targetFile, err := os.Create(storagePath)
+		if err != nil {
+			openedFile.Close()
+			h.logFailure(request, "files_upload_create_file", err, "userId", userID, "storagePath", storagePath)
+			WriteError(writer, http.StatusInternalServerError, "failed to save uploaded file")
+			return
+		}
+
+		if _, err := io.Copy(targetFile, openedFile); err != nil {
+			targetFile.Close()
+			openedFile.Close()
+			_ = os.Remove(storagePath)
+			h.logFailure(request, "files_upload_copy_file", err, "userId", userID, "storagePath", storagePath)
+			WriteError(writer, http.StatusInternalServerError, "failed to persist uploaded file")
+			return
+		}
+
+		targetFile.Close()
+		openedFile.Close()
+
+		attachment, err := h.Store.CreateAttachment(userID, task.ID, session.ID, safeFileName, detectedType, resolvedSourceType, storagePath)
+		if err != nil {
+			_ = os.Remove(storagePath)
+			h.logFailure(request, "files_upload_create_attachment", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "fileName", safeFileName)
+			WriteError(writer, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		attachments = append(attachments, attachment)
+	}
+
+	WriteJSON(writer, http.StatusCreated, attachments)
+}
+
+/**
+ * GetFile streams one uploaded attachment back to the front-end for preview or download.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that contains the attachment path.
+ */
+func (h *Handlers) GetFile(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "files_get_auth_user", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	attachmentID, err := parseFileRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "files_get_parse_route", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	attachment, err := h.Store.GetAttachmentByID(userID, attachmentID)
+	if err != nil {
+		h.logFailure(request, "files_get_attachment", err, "userId", userID, "attachmentId", attachmentID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	dispositionType := "attachment"
+	if attachment.SourceType == "image" {
+		dispositionType = "inline"
+	}
+	writer.Header().Set("Content-Type", attachment.FileType)
+	writer.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", dispositionType, attachment.FileName))
+	http.ServeFile(writer, request, attachment.StorageKey)
+}
+
+/**
  * CreateMessage executes the active session agent and stores the resulting message pair.
  * Params:
  * - writer: the HTTP response writer.
@@ -555,7 +719,14 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunSessionAgent(task, session, input.Content)
+	composedPrompt, attachments, err := h.buildAgentPrompt(userID, task.ID, session, input.Content, input.AttachmentIDs)
+	if err != nil {
+		h.logFailure(request, "message_create_build_prompt", err, "userId", userID, "taskId", taskID, "sessionId", session.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -575,7 +746,7 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent, nil)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent, nil, attachments)
 	if err != nil {
 		h.logFailure(request, "message_create_store_pair", err, "userId", userID, "taskId", taskID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -650,7 +821,14 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 		}
 	}
 
-	composedPrompt := buildQuotedPrompt(sourceMessages, trimmedUserContent)
+	basePrompt := buildQuotedPrompt(sourceMessages, trimmedUserContent)
+	composedPrompt, attachments, err := h.buildAgentPrompt(userID, task.ID, session, basePrompt, input.AttachmentIDs)
+	if err != nil {
+		h.logFailure(request, "message_quote_build_prompt", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
@@ -669,7 +847,7 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, nil)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, nil, attachments)
 	if err != nil {
 		h.logFailure(request, "message_quote_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -703,7 +881,7 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	if action != "reply" && action != "regenerate" {
+	if action != "reply" && action != "regenerate" && action != "pin" {
 		WriteError(writer, http.StatusBadRequest, "invalid message action")
 		return
 	}
@@ -715,6 +893,11 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 			WriteError(writer, http.StatusBadRequest, "invalid reply payload")
 			return
 		}
+	}
+
+	if action == "pin" {
+		h.handleMessagePin(writer, request, userID, messageID)
+		return
 	}
 
 	sourceMessage, err := h.Store.GetMessageByID(userID, messageID)
@@ -749,7 +932,14 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	composedPrompt, replyToMessageID := buildReplyPrompt(sourceMessage, trimmedUserContent)
+	basePrompt, replyToMessageID := buildReplyPrompt(sourceMessage, trimmedUserContent)
+	composedPrompt, attachments, err := h.buildAgentPrompt(userID, task.ID, session, basePrompt, input.AttachmentIDs)
+	if err != nil {
+		h.logFailure(request, "message_reply_build_prompt", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
@@ -769,7 +959,7 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, replyToMessageID)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, replyToMessageID, attachments)
 	if err != nil {
 		h.logFailure(request, "message_reply_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -805,7 +995,13 @@ func (h *Handlers) handleRegenerateMessage(
 		return
 	}
 
-	composedPrompt := buildRegeneratePrompt(sourceMessage)
+	composedPrompt, _, err := h.buildAgentPrompt(userID, task.ID, session, buildRegeneratePrompt(sourceMessage), nil)
+	if err != nil {
+		h.logFailure(request, "message_regenerate_build_prompt", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
@@ -835,6 +1031,26 @@ func (h *Handlers) handleRegenerateMessage(
 	WriteJSON(writer, http.StatusCreated, map[string]domain.Message{
 		"assistantMessage": assistantMessage,
 	})
+}
+
+/**
+ * handleMessagePin toggles one message into or out of the session pin set.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that triggered the pin action.
+ * - userID: the authenticated user identifier from the bearer token.
+ * - messageID: the selected message identifier from the request path.
+ */
+func (h *Handlers) handleMessagePin(writer http.ResponseWriter, request *http.Request, userID string, messageID string) {
+	isPinned := request.Method == http.MethodPost
+	updatedMessage, err := h.Store.SetMessagePin(userID, messageID, isPinned)
+	if err != nil {
+		h.logFailure(request, "message_pin_toggle", err, "userId", userID, "messageId", messageID, "isPinned", isPinned)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusOK, updatedMessage)
 }
 
 /**
@@ -879,6 +1095,58 @@ func buildRegeneratePrompt(sourceMessage domain.Message) string {
 }
 
 /**
+ * buildAgentPrompt injects pinned context and uploaded attachment paths ahead of the base user prompt.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - taskID: the active task identifier.
+ * - session: the active session that owns both runtime context and draft attachments.
+ * - basePrompt: the already-constructed business prompt for normal send, quote, reply, or regenerate.
+ * - attachmentIDs: the uploaded draft attachment identifiers selected for this message send.
+ * Returns:
+ * - the final agent prompt and the resolved attachment records that should bind to the user message.
+ */
+func (h *Handlers) buildAgentPrompt(
+	userID string,
+	taskID string,
+	session domain.Session,
+	basePrompt string,
+	attachmentIDs []string,
+) (string, []domain.Attachment, error) {
+	promptSegments := make([]string, 0, 3)
+
+	pinnedMessages, err := h.Store.ListPinnedMessages(userID, session.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(pinnedMessages) > 0 {
+		pinnedLines := make([]string, 0, len(pinnedMessages))
+		for index, pinnedMessage := range pinnedMessages {
+			pinnedLines = append(pinnedLines, fmt.Sprintf("重要信息%d：%s", index+1, pinnedMessage.Content))
+		}
+		promptSegments = append(promptSegments, strings.Join(pinnedLines, "\n"))
+	}
+
+	attachments, err := h.Store.GetDraftAttachments(userID, taskID, session.ID, attachmentIDs)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(attachments) > 0 {
+		attachmentLines := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
+			if attachment.SourceType == "image" {
+				attachmentLines = append(attachmentLines, fmt.Sprintf("请查看图片 %s，路径：%s", attachment.FileName, attachment.StorageKey))
+				continue
+			}
+			attachmentLines = append(attachmentLines, fmt.Sprintf("请阅读文件 %s，路径：%s", attachment.FileName, attachment.StorageKey))
+		}
+		promptSegments = append(promptSegments, fmt.Sprintf("以下是本轮新上传的资料，请先读取这些路径对应的内容：\n%s", strings.Join(attachmentLines, "\n")))
+	}
+
+	promptSegments = append(promptSegments, basePrompt)
+	return strings.Join(promptSegments, "\n\n"), attachments, nil
+}
+
+/**
  * parseTaskSubroute extracts the task identifier and trailing action from a task route.
  * Params:
  * - path: the request path that starts with /api/tasks/{taskId}.
@@ -913,6 +1181,20 @@ func parseSessionRoute(path string) (string, error) {
 }
 
 /**
+ * parseFileRoute extracts the attachment identifier from /api/files/{attachmentId}.
+ * Params:
+ * - path: the request path that starts with /api/files/.
+ */
+func parseFileRoute(path string) (string, error) {
+	trimmed := strings.TrimPrefix(path, "/api/files/")
+	attachmentID := strings.Trim(trimmed, "/")
+	if attachmentID == "" {
+		return "", errorsNew("attachment id is required")
+	}
+	return attachmentID, nil
+}
+
+/**
  * parseMessageActionRoute extracts the message identifier and action from /api/messages/{messageId}/{action}.
  * Params:
  * - path: the request path that starts with /api/messages/.
@@ -943,4 +1225,74 @@ type routeError struct {
 
 func (r *routeError) Error() string {
 	return r.message
+}
+
+/**
+ * normalizeAttachmentSourceType validates the front-end upload kind into the storage-friendly enum.
+ * Params:
+ * - value: the sourceType field submitted by the multipart upload request.
+ */
+func normalizeAttachmentSourceType(value string) string {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	switch normalized {
+	case "image", "file":
+		return normalized
+	default:
+		return ""
+	}
+}
+
+/**
+ * sanitizeUploadedFileName removes path segments from one uploaded file name before local storage.
+ * Params:
+ * - fileName: the original file name submitted by the browser.
+ */
+func sanitizeUploadedFileName(fileName string) string {
+	baseName := strings.TrimSpace(filepath.Base(fileName))
+	baseName = strings.ReplaceAll(baseName, "/", "-")
+	baseName = strings.ReplaceAll(baseName, "\\", "-")
+	if baseName == "" || baseName == "." {
+		return "upload"
+	}
+	return baseName
+}
+
+/**
+ * buildStoredFileName creates a unique on-disk file name while preserving the original extension.
+ * Params:
+ * - fileName: the sanitized display file name selected by the user.
+ */
+func buildStoredFileName(fileName string) string {
+	extension := filepath.Ext(fileName)
+	baseName := strings.TrimSuffix(fileName, extension)
+	safeBaseName := strings.ReplaceAll(baseName, " ", "_")
+	return fmt.Sprintf("%s-%d%s", safeBaseName, time.Now().UnixNano(), extension)
+}
+
+/**
+ * detectUploadedFileType resolves the most reliable MIME type for one uploaded browser file.
+ * Params:
+ * - file: the opened multipart file used for content sniffing.
+ * - fallbackType: the MIME type reported by the browser headers when available.
+ */
+func detectUploadedFileType(file multipart.File, fallbackType string) (string, error) {
+	sniffBuffer := make([]byte, 512)
+	readBytes, err := file.Read(sniffBuffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+
+	detectedType := strings.TrimSpace(fallbackType)
+	if detectedType == "" || detectedType == "application/octet-stream" {
+		detectedType = http.DetectContentType(sniffBuffer[:readBytes])
+	}
+	if detectedType == "" {
+		detectedType = "application/octet-stream"
+	}
+
+	return detectedType, nil
 }

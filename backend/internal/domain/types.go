@@ -59,16 +59,31 @@ type AgentOption struct {
 	ProviderType string `json:"providerType"`
 }
 
+// Attachment represents one uploaded file or image bound to a task session message.
+type Attachment struct {
+	ID         string `json:"id"`
+	TaskID     string `json:"taskId"`
+	SessionID  string `json:"sessionId"`
+	MessageID  string `json:"messageId"`
+	FileName   string `json:"fileName"`
+	FileType   string `json:"fileType"`
+	SourceType string `json:"sourceType"`
+	SourceURL  string `json:"sourceUrl"`
+	StorageKey string `json:"storageKey"`
+}
+
 // Message represents one chat message row for a session transcript.
 type Message struct {
-	ID        string `json:"id"`
-	TaskID    string `json:"taskId"`
-	SessionID string `json:"sessionId"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Status    string `json:"status"`
-	TimeLabel string `json:"timeLabel"`
-	ReplyToID string `json:"replyToMessageId"`
+	ID          string       `json:"id"`
+	TaskID      string       `json:"taskId"`
+	SessionID   string       `json:"sessionId"`
+	Role        string       `json:"role"`
+	Content     string       `json:"content"`
+	Status      string       `json:"status"`
+	TimeLabel   string       `json:"timeLabel"`
+	ReplyToID   string       `json:"replyToMessageId"`
+	IsPinned    bool         `json:"isPinned"`
+	Attachments []Attachment `json:"attachments"`
 }
 
 // LoginRequest carries the login payload.
@@ -113,12 +128,14 @@ type UpdateSessionRequest struct {
 
 // CreateMessageRequest carries user input for one session round.
 type CreateMessageRequest struct {
-	SessionID string `json:"sessionId"`
-	Content   string `json:"content"`
+	SessionID     string   `json:"sessionId"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachmentIds"`
 }
 
 // CreateDerivedMessageRequest carries user input for quote and reply message actions.
 type CreateDerivedMessageRequest struct {
-	Content    string   `json:"content"`
-	MessageIDs []string `json:"messageIds"`
+	Content       string   `json:"content"`
+	MessageIDs    []string `json:"messageIds"`
+	AttachmentIDs []string `json:"attachmentIds"`
 }

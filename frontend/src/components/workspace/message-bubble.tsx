@@ -3,9 +3,10 @@
 
 "use client";
 
-import { Check, Copy, CornerDownLeft, Quote, RotateCcw } from "lucide-react";
+import { Check, Copy, CornerDownLeft, Pin, Quote, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
+import { AttachmentStrip } from "@/components/workspace/attachment-strip";
 import { Button } from "@/components/ui/button";
 import { MarkdownContent } from "@/components/workspace/markdown-content";
 import { cn } from "@/lib/utils";
@@ -94,22 +95,28 @@ async function copyCodeBlock(value: string): Promise<void> {
  * - props.onQuote: optional callback that starts one quote action from the current message.
  * - props.onReply: optional callback that starts one reply action from the current message.
  * - props.onRegenerate: optional callback that reruns the selected assistant message.
+ * - props.onTogglePin: optional callback that toggles the pinned state for the current message.
  * - props.isRegenerating: whether the regenerate action is currently blocked by an in-flight request.
+ * - props.isPinUpdating: whether the pin action is currently blocked by an in-flight request.
  * Returns:
  * - the message bubble element.
  */
 export function MessageBubble({
   message,
   isRegenerating = false,
+  isPinUpdating = false,
   onQuote,
   onReply,
   onRegenerate,
+  onTogglePin,
 }: {
   message: Message;
   isRegenerating?: boolean;
+  isPinUpdating?: boolean;
   onQuote?: (message: Message) => void;
   onReply?: (message: Message) => void;
   onRegenerate?: (message: Message) => void;
+  onTogglePin?: (message: Message, nextPinned: boolean) => void;
 }): JSX.Element {
   const [copiedBlockKey, setCopiedBlockKey] = useState<string | null>(null);
   const isUser = message.role === "user";
@@ -133,6 +140,7 @@ export function MessageBubble({
         )}
       >
         <div className="space-y-3">
+          <AttachmentStrip attachments={message.attachments ?? []} compact />
           {blocks.map((block, index) => {
             const blockKey = `${message.id}-${index}`;
 
@@ -230,6 +238,26 @@ export function MessageBubble({
                 variant="ghost"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+            {onTogglePin ? (
+              <Button
+                className={cn(
+                  message.isPinned
+                    ? isUser
+                      ? "bg-white/14 text-paper hover:bg-white/20 hover:text-paper"
+                      : "bg-pine/10 text-pine hover:bg-pine/14"
+                    : isUser
+                      ? "text-paper/72 hover:bg-white/12 hover:text-paper"
+                      : "text-ink/48 hover:text-ink",
+                )}
+                disabled={isPinUpdating}
+                onClick={() => onTogglePin(message, !message.isPinned)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Pin className="h-3.5 w-3.5" />
               </Button>
             ) : null}
           </div>

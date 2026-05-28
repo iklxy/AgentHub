@@ -9,12 +9,14 @@ import { StatusBadge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
 import { ChatInput } from "@/components/workspace/chat-input";
 import { MessageBubble } from "@/components/workspace/message-bubble";
-import type { Message, Session, Task } from "@/types/domain";
+import type { Attachment, AttachmentSourceType, Message, Session, Task } from "@/types/domain";
 
 /**
  * Renders the right-side chat workspace for a selected task session.
  * @param props.errorMessage Optional status text shown above the input area.
  * @param props.isRegenerating Whether one regenerate request is currently running.
+ * @param props.isPinUpdating Whether one pin toggle request is currently running.
+ * @param props.isUploadingAttachments Whether one attachment upload request is currently running.
  * @param props.isSending Whether the current task session is waiting for an assistant reply.
  * @param props.messages The ordered message list rendered inside the transcript.
  * @param props.messageOperation Optional active quote or reply context for the composer.
@@ -22,6 +24,10 @@ import type { Message, Session, Task } from "@/types/domain";
  * @param props.onQuoteMessage Starts a quote action from one transcript message.
  * @param props.onReplyMessage Starts a reply action from one transcript message.
  * @param props.onRegenerateMessage Reruns one assistant message inside the current session.
+ * @param props.onToggleMessagePin Toggles the pinned state for one transcript message.
+ * @param props.onUploadAttachments Uploads one or more files for the active session composer.
+ * @param props.pendingAttachments The uploaded attachments queued for the next user message.
+ * @param props.onRemovePendingAttachment Removes one pending attachment from the composer.
  * @param props.onSendMessage The callback executed when the user submits a message.
  * @param props.session The active task session displayed in this chat column.
  * @param props.task The active task that owns the current session.
@@ -30,29 +36,41 @@ import type { Message, Session, Task } from "@/types/domain";
 export function ChatColumn({
   errorMessage,
   isRegenerating,
+  isPinUpdating,
+  isUploadingAttachments,
   isSending,
   messages,
   messageOperation,
+  pendingAttachments,
   onClearMessageOperation,
+  onRemovePendingAttachment,
   onQuoteMessage,
   onReplyMessage,
   onRegenerateMessage,
   onSendMessage,
+  onToggleMessagePin,
+  onUploadAttachments,
   session,
   task,
 }: {
   errorMessage?: string;
   isRegenerating: boolean;
+  isPinUpdating: boolean;
+  isUploadingAttachments: boolean;
   isSending: boolean;
   messages: Message[];
   messageOperation?: {
     mode: "quote" | "reply";
     messages: Message[];
   } | null;
+  pendingAttachments: Attachment[];
   onClearMessageOperation?: () => void;
+  onRemovePendingAttachment: (attachmentId: string) => void;
   onQuoteMessage: (message: Message) => void;
   onReplyMessage: (message: Message) => void;
   onRegenerateMessage: (message: Message) => void;
+  onToggleMessagePin: (message: Message, nextPinned: boolean) => void;
+  onUploadAttachments: (sourceType: AttachmentSourceType, files: File[]) => void;
   onSendMessage: (content: string) => void;
   session: Session;
   task: Task;
@@ -98,11 +116,13 @@ export function ChatColumn({
           messages.map((message) => (
             <MessageBubble
               isRegenerating={isRegenerating}
+              isPinUpdating={isPinUpdating}
               key={message.id}
               message={message}
               onQuote={onQuoteMessage}
               onRegenerate={onRegenerateMessage}
               onReply={onReplyMessage}
+              onTogglePin={onToggleMessagePin}
             />
           ))
         )}
@@ -125,6 +145,7 @@ export function ChatColumn({
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}
         <ChatInput
           isSending={isSending}
+          isUploadingAttachments={isUploadingAttachments}
           operationHint={
             messageOperation
               ? {
@@ -134,7 +155,10 @@ export function ChatColumn({
               : null
           }
           onClearOperation={onClearMessageOperation}
+          onRemoveAttachment={onRemovePendingAttachment}
           onSend={onSendMessage}
+          onUploadAttachments={onUploadAttachments}
+          pendingAttachments={pendingAttachments}
           placeholder={`继续围绕「${session.title}」发消息，例如：把这个会话拆成更细的执行步骤。`}
         />
       </div>

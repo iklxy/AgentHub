@@ -51,3 +51,6 @@ If a modification fails, explain the reason for the failure and suggest the next
 ## Python environment
 
 - If any Python packages require installation, please install them under the AgentHub virtual environment managed by conda.
+
+## Operating requirements
+- For the project I mentioned that needs review, during the execution process, use the `/subagent` command to start a sub-agent, and after the execution is complete, execute `/review`.

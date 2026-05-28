@@ -525,6 +525,8 @@
 | `id` | `UUID` | 附件主键 |
 | `workspace_id` | `UUID` | 所属 workspace |
 | `task_id` | `UUID` | 所属 task |
+| `session_id` | `UUID` | 所属 session |
+| `message_id` | `UUID` | 绑定的消息 id，发送前可为空 |
 | `file_name` | `VARCHAR(255)` | 文件名称 |
 | `file_type` | `VARCHAR(64)` | 文件类型 |
 | `storage_key` | `TEXT` | 对象存储 key |

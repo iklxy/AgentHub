@@ -26,10 +26,12 @@ import {
   quoteMessage,
   regenerateMessage,
   replyMessage,
+  toggleMessagePin,
+  uploadAttachments,
   updateSession,
 } from "@/lib/api";
 import { clearStoredToken, getStoredToken } from "@/lib/auth";
-import type { AgentOption, Message, Session, Task, User, Workspace } from "@/types/domain";
+import type { AgentOption, Attachment, Message, Session, Task, User, Workspace } from "@/types/domain";
 
 /**
  * Sorts sessions for the left sidebar with pinned sessions first and recent activity second.
@@ -55,7 +57,7 @@ function sortSessions(items: Session[]): Session[] {
  * @param content The trimmed user message content.
  * @returns The local optimistic message entity rendered before the server response arrives.
  */
-function buildOptimisticUserMessage(taskId: string, sessionId: string, content: string): Message {
+function buildOptimisticUserMessage(taskId: string, sessionId: string, content: string, attachments: Attachment[]): Message {
   return {
     id: `local-user-${Date.now()}`,
     taskId,
@@ -64,6 +66,8 @@ function buildOptimisticUserMessage(taskId: string, sessionId: string, content: 
     content,
     timeLabel: "刚刚",
     replyToMessageId: "",
+    isPinned: false,
+    attachments,
   };
 }
 
@@ -102,6 +106,9 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
     messages: Message[];
   } | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isPinUpdating, setIsPinUpdating] = useState(false);
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [sessionDraft, setSessionDraft] = useState({
     title: "",
@@ -206,6 +213,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             setErrorMessage("");
             setMessages([]);
             setMessageOperation(null);
+            setPendingAttachments([]);
             setActiveSessionId(sessionId);
           }}
           onTogglePin={(sessionId, nextPinned) => {
@@ -243,15 +251,20 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
           <ChatColumn
             errorMessage={errorMessage}
             isRegenerating={isRegenerating && activeSessionIdRef.current === activeSession.id}
+            isPinUpdating={isPinUpdating}
+            isUploadingAttachments={isUploadingAttachments}
             isSending={isPending}
             messages={messages}
             onSendMessage={(content) => {
               setErrorMessage("");
               const currentMessageOperation = messageOperation;
-              const optimisticMessage = buildOptimisticUserMessage(task.id, activeSession.id, content);
+              const currentPendingAttachments = pendingAttachments;
+              const targetSessionId = activeSession.id;
+              const optimisticMessage = buildOptimisticUserMessage(task.id, targetSessionId, content, currentPendingAttachments);
 
               setMessages((current) => [...current, optimisticMessage]);
               setMessageOperation(null);
+              setPendingAttachments([]);
 
               startTransition(async () => {
                 try {
@@ -260,25 +273,32 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                       ? await quoteMessage(token, {
                           content,
                           messageIds: currentMessageOperation.messages.map((message) => message.id),
+                          attachmentIds: currentPendingAttachments.map((attachment) => attachment.id),
                         })
                       : currentMessageOperation?.mode === "reply"
-                        ? await replyMessage(token, currentMessageOperation.messages[0].id, { content })
-                        : await createMessage(token, task.id, {
-                            sessionId: activeSession.id,
+                        ? await replyMessage(token, currentMessageOperation.messages[0].id, {
                             content,
+                            attachmentIds: currentPendingAttachments.map((attachment) => attachment.id),
+                          })
+                        : await createMessage(token, task.id, {
+                            sessionId: targetSessionId,
+                            content,
+                            attachmentIds: currentPendingAttachments.map((attachment) => attachment.id),
                           });
 
-                  setMessages((current) => [
-                    ...current.filter((item) => item.id !== optimisticMessage.id),
-                    response.userMessage,
-                    response.assistantMessage,
-                  ]);
+                  if (activeSessionIdRef.current === targetSessionId) {
+                    setMessages((current) => [
+                      ...current.filter((item) => item.id !== optimisticMessage.id),
+                      response.userMessage,
+                      response.assistantMessage,
+                    ]);
+                  }
                   setTask((current) =>
                     current
                       ? {
                           ...current,
                           status: "running",
-                          currentSessionId: activeSession.id,
+                          currentSessionId: targetSessionId,
                           updatedAtLabel: "刚刚",
                         }
                       : current,
@@ -289,7 +309,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                         ? {
                             ...item,
                             status: "running",
-                            currentSessionId: activeSession.id,
+                            currentSessionId: targetSessionId,
                             updatedAtLabel: "刚刚",
                           }
                         : item,
@@ -298,7 +318,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                   setSessions((current) =>
                     sortSessions(
                       current.map((item) =>
-                        item.id === activeSession.id
+                        item.id === targetSessionId
                           ? {
                               ...item,
                               startedAt: item.startedAt || new Date().toISOString(),
@@ -311,13 +331,20 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                     ),
                   );
                 } catch (error) {
-                  setMessages((current) => current.filter((item) => item.id !== optimisticMessage.id));
+                  if (activeSessionIdRef.current === targetSessionId) {
+                    setMessages((current) => current.filter((item) => item.id !== optimisticMessage.id));
+                    setPendingAttachments(currentPendingAttachments);
+                  }
                   setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
                 }
               });
             }}
             messageOperation={messageOperation}
+            pendingAttachments={pendingAttachments}
             onClearMessageOperation={() => setMessageOperation(null)}
+            onRemovePendingAttachment={(attachmentId) => {
+              setPendingAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+            }}
             onQuoteMessage={(message) => {
               setMessageOperation((current) => {
                 const normalizedMessage = {
@@ -341,6 +368,49 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                   messages: [...current.messages, normalizedMessage],
                 };
               });
+            }}
+            onToggleMessagePin={(message, nextPinned) => {
+              if (isPinUpdating) {
+                return;
+              }
+
+              setErrorMessage("");
+              setIsPinUpdating(true);
+
+              toggleMessagePin(token, message.id, nextPinned)
+                .then((updatedMessage) => {
+                  setMessages((current) =>
+                    current.map((item) => (item.id === updatedMessage.id ? updatedMessage : item)),
+                  );
+                })
+                .catch((error) => {
+                  setErrorMessage(error instanceof Error ? error.message : "更新 pin 失败");
+                })
+                .finally(() => {
+                  setIsPinUpdating(false);
+                });
+            }}
+            onUploadAttachments={(sourceType, files) => {
+              if (files.length === 0 || isUploadingAttachments) {
+                return;
+              }
+
+              setErrorMessage("");
+              setIsUploadingAttachments(true);
+              const targetSessionId = activeSession.id;
+
+              uploadAttachments(token, task.id, targetSessionId, sourceType, files)
+                .then((uploadedAttachments) => {
+                  if (activeSessionIdRef.current === targetSessionId) {
+                    setPendingAttachments((current) => [...current, ...uploadedAttachments]);
+                  }
+                })
+                .catch((error) => {
+                  setErrorMessage(error instanceof Error ? error.message : "上传附件失败");
+                })
+                .finally(() => {
+                  setIsUploadingAttachments(false);
+                });
             }}
             onRegenerateMessage={(message) => {
               if (isRegenerating) {

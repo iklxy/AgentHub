@@ -76,7 +76,7 @@ func CORS(allowedOrigin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 
 		if request.Method == http.MethodOptions {
 			writer.WriteHeader(http.StatusNoContent)

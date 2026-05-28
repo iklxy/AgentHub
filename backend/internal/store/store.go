@@ -23,6 +23,11 @@ type Repository interface {
 	ListMessages(userID string, taskID string, sessionID string) ([]domain.Message, error)
 	GetMessageByID(userID string, messageID string) (domain.Message, error)
 	GetMessagesByIDs(userID string, messageIDs []string) ([]domain.Message, error)
-	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string) (domain.Message, domain.Message, error)
+	ListPinnedMessages(userID string, sessionID string) ([]domain.Message, error)
+	SetMessagePin(userID string, messageID string, isPinned bool) (domain.Message, error)
+	GetDraftAttachments(userID string, taskID string, sessionID string, attachmentIDs []string) ([]domain.Attachment, error)
+	CreateAttachment(userID string, taskID string, sessionID string, fileName string, fileType string, sourceType string, storageKey string) (domain.Attachment, error)
+	GetAttachmentByID(userID string, attachmentID string) (domain.Attachment, error)
+	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment) (domain.Message, domain.Message, error)
 	CreateAssistantMessage(userID string, taskID string, sessionID string, assistantContent string) (domain.Message, error)
 }

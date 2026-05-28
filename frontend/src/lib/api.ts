@@ -1,7 +1,7 @@
 // Date: 2026-05-25
 // Author: XinYang Li
 
-import type { AgentOption, Message, Session, Task, User, Workspace } from "@/types/domain";
+import type { AgentOption, Attachment, AttachmentSourceType, Message, Session, Task, User, Workspace } from "@/types/domain";
 import { uiLog } from "@/lib/logger";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://192.168.139.155:8080";
@@ -43,11 +43,13 @@ type UpdateSessionPayload = {
 type CreateMessagePayload = {
   sessionId: string;
   content: string;
+  attachmentIds?: string[];
 };
 
 type CreateMessageActionPayload = {
   content: string;
   messageIds?: string[];
+  attachmentIds?: string[];
 };
 
 type AuthResponse = {
@@ -63,6 +65,34 @@ type MessageRoundResponse = {
 type RegenerateMessageResponse = {
   assistantMessage: Message;
 };
+
+/**
+ * Resolves one attachment URL against the configured backend origin.
+ * @param attachment The attachment entity returned by the backend.
+ * @returns The attachment with a browser-accessible absolute source URL.
+ */
+function normalizeAttachment(attachment: Attachment): Attachment {
+  if (!attachment.sourceUrl || attachment.sourceUrl.startsWith("http://") || attachment.sourceUrl.startsWith("https://")) {
+    return attachment;
+  }
+
+  return {
+    ...attachment,
+    sourceUrl: `${API_BASE_URL}${attachment.sourceUrl}`,
+  };
+}
+
+/**
+ * Normalizes one message response for front-end rendering.
+ * @param message The message entity returned by the backend.
+ * @returns The message with normalized attachment URLs.
+ */
+function normalizeMessage(message: Message): Message {
+  return {
+    ...message,
+    attachments: (message.attachments ?? []).map(normalizeAttachment),
+  };
+}
 
 /**
  * Executes an HTTP request against the AgentHub backend.
@@ -263,7 +293,9 @@ export function updateSession(token: string, sessionId: string, payload: UpdateS
  */
 export function getMessages(token: string, taskId: string, sessionId: string): Promise<Message[]> {
   const params = new URLSearchParams({ sessionId });
-  return request<Message[]>(`/api/tasks/${taskId}/messages?${params.toString()}`, { method: "GET", token });
+  return request<Message[]>(`/api/tasks/${taskId}/messages?${params.toString()}`, { method: "GET", token }).then((messages) =>
+    messages.map(normalizeMessage),
+  );
 }
 
 /**
@@ -278,7 +310,10 @@ export function createMessage(token: string, taskId: string, payload: CreateMess
     method: "POST",
     token,
     body: JSON.stringify(payload),
-  });
+  }).then((response) => ({
+    userMessage: normalizeMessage(response.userMessage),
+    assistantMessage: normalizeMessage(response.assistantMessage),
+  }));
 }
 
 /**
@@ -292,7 +327,10 @@ export function quoteMessage(token: string, payload: CreateMessageActionPayload)
     method: "POST",
     token,
     body: JSON.stringify(payload),
-  });
+  }).then((response) => ({
+    userMessage: normalizeMessage(response.userMessage),
+    assistantMessage: normalizeMessage(response.assistantMessage),
+  }));
 }
 
 /**
@@ -307,7 +345,10 @@ export function replyMessage(token: string, messageId: string, payload: CreateMe
     method: "POST",
     token,
     body: JSON.stringify(payload),
-  });
+  }).then((response) => ({
+    userMessage: normalizeMessage(response.userMessage),
+    assistantMessage: normalizeMessage(response.assistantMessage),
+  }));
 }
 
 /**
@@ -321,5 +362,60 @@ export function regenerateMessage(token: string, messageId: string): Promise<Reg
     method: "POST",
     token,
     body: JSON.stringify({}),
+  }).then((response) => ({
+    assistantMessage: normalizeMessage(response.assistantMessage),
+  }));
+}
+
+/**
+ * Uploads one or more draft attachments for the active task session.
+ * @param token The bearer token stored in the browser.
+ * @param taskId The owning task identifier.
+ * @param sessionId The active session identifier that owns the upload directory.
+ * @param sourceType The logical attachment kind, currently image or file.
+ * @param files The browser file list selected by the user.
+ * @returns The uploaded attachment entities used by the composer before send.
+ */
+export async function uploadAttachments(
+  token: string,
+  taskId: string,
+  sessionId: string,
+  sourceType: AttachmentSourceType,
+  files: File[],
+): Promise<Attachment[]> {
+  const formData = new FormData();
+  formData.set("taskId", taskId);
+  formData.set("sessionId", sessionId);
+  formData.set("sourceType", sourceType);
+  files.forEach((file) => formData.append("files", file));
+
+  const response = await fetch(`${API_BASE_URL}/api/files/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
   });
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(errorPayload?.error ?? `Request failed: ${response.status}`);
+  }
+
+  const attachments = (await response.json()) as Attachment[];
+  return attachments.map(normalizeAttachment);
+}
+
+/**
+ * Toggles the pinned state for one message.
+ * @param token The bearer token stored in the browser.
+ * @param messageId The selected message identifier.
+ * @param isPinned Whether the message should become pinned or unpinned.
+ * @returns The updated message entity.
+ */
+export function toggleMessagePin(token: string, messageId: string, isPinned: boolean): Promise<Message> {
+  return request<Message>(`/api/messages/${messageId}/pin`, {
+    method: isPinned ? "POST" : "DELETE",
+    token,
+  }).then(normalizeMessage);
 }

@@ -175,18 +175,39 @@ func ResolveAgentPaths(rootDir string) (string, string, string) {
 	return rootDir, filepath.Join(rootDir, "src"), filepath.Join(repoRoot, ".AgentHub")
 }
 
-func (s *Service) ensureHarness(session domain.Session, task domain.Task, runtimeSessionID string) (string, string, error) {
-	agentDir := filepath.Join(s.harnessRoot, fmt.Sprintf(".%s", session.PrimaryAgentName))
-	sessionsDir := filepath.Join(agentDir, "sessions", session.ID)
-	logsDir := filepath.Join(sessionsDir, "logs")
-	workDir := filepath.Join(agentDir, "workspace")
-	ruleFile := filepath.Join(agentDir, "Agent.md")
-
-	for _, path := range []string{s.harnessRoot, agentDir, sessionsDir, logsDir, workDir} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return "", "", err
-		}
+/**
+ * EnsureSessionAssetDir resolves and creates the per-session attachment directory for one agent.
+ * Params:
+ * - session: the active task session that owns the uploaded assets.
+ * - sourceType: the logical attachment kind, currently image or file.
+ * Returns:
+ * - the absolute directory path used to persist uploaded assets.
+ */
+func (s *Service) EnsureSessionAssetDir(session domain.Session, sourceType string) (string, error) {
+	_, sessionDir, _, _, err := s.ensureHarnessPaths(session)
+	if err != nil {
+		return "", err
 	}
+
+	directoryName := "file"
+	if strings.EqualFold(strings.TrimSpace(sourceType), "image") {
+		directoryName = "photo"
+	}
+
+	assetDir := filepath.Join(sessionDir, directoryName)
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return "", err
+	}
+
+	return assetDir, nil
+}
+
+func (s *Service) ensureHarness(session domain.Session, task domain.Task, runtimeSessionID string) (string, string, error) {
+	agentDir, sessionsDir, _, workDir, err := s.ensureHarnessPaths(session)
+	if err != nil {
+		return "", "", err
+	}
+	ruleFile := filepath.Join(agentDir, "Agent.md")
 
 	if _, err := os.Stat(ruleFile); os.IsNotExist(err) {
 		defaultRule := fmt.Sprintf("# %s Agent Rules\n\n- Stay focused on the current task.\n- Reply clearly and directly.\n", session.PrimaryAgentName)
@@ -217,4 +238,26 @@ func (s *Service) ensureHarness(session domain.Session, task domain.Task, runtim
 	}
 
 	return workDir, ruleFile, nil
+}
+
+/**
+ * ensureHarnessPaths resolves and creates the standard agent/session directory tree.
+ * Params:
+ * - session: the active task session used to locate the agent harness subtree.
+ * Returns:
+ * - the agent root, session root under workspace/session/{session_id}, logs directory, and shared workspace directory.
+ */
+func (s *Service) ensureHarnessPaths(session domain.Session) (string, string, string, string, error) {
+	agentDir := filepath.Join(s.harnessRoot, fmt.Sprintf(".%s", session.PrimaryAgentName))
+	workDir := filepath.Join(agentDir, "workspace")
+	sessionsDir := filepath.Join(workDir, "session", session.ID)
+	logsDir := filepath.Join(sessionsDir, "logs")
+
+	for _, path := range []string{s.harnessRoot, agentDir, sessionsDir, logsDir, workDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return "", "", "", "", err
+		}
+	}
+
+	return agentDir, sessionsDir, logsDir, workDir, nil
 }

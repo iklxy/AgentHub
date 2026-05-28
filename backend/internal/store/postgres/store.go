@@ -745,7 +745,8 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 	ctx := context.Background()
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at,
+		        COALESCE(m.reply_to_message_id::text, ''), COALESCE(m.is_pinned, false)
 		 FROM messages m
 		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
 		 WHERE wm.user_id = $1 AND m.task_id = $2 AND m.session_id = $3
@@ -766,18 +767,33 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 	defer rows.Close()
 
 	messages := []domain.Message{}
+	messageIDs := []string{}
 	for rows.Next() {
 		var message domain.Message
 		var createdAt time.Time
-		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID); err != nil {
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID, &message.IsPinned); err != nil {
 			return nil, err
 		}
 		message.Status = "success"
 		message.TimeLabel = createdAt.Local().Format("15:04")
 		messages = append(messages, message)
+		messageIDs = append(messageIDs, message.ID)
 	}
 
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	attachmentsByMessageID, err := s.loadAttachmentsByMessageIDs(ctx, userID, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for index := range messages {
+		messages[index].Attachments = attachmentsByMessageID[messages[index].ID]
+	}
+
+	return messages, nil
 }
 
 /**
@@ -795,14 +811,15 @@ func (s *Store) GetMessageByID(userID string, messageID string) (domain.Message,
 
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at,
+		        COALESCE(m.reply_to_message_id::text, ''), COALESCE(m.is_pinned, false)
 		 FROM messages m
 		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
 		 WHERE wm.user_id = $1 AND m.id = $2
 		 LIMIT 1`,
 		userID,
 		messageID,
-	).Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID)
+	).Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID, &message.IsPinned)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Message{}, errors.New("message not found")
@@ -812,6 +829,11 @@ func (s *Store) GetMessageByID(userID string, messageID string) (domain.Message,
 
 	message.Status = "success"
 	message.TimeLabel = createdAt.Local().Format("15:04")
+	attachmentsByMessageID, err := s.loadAttachmentsByMessageIDs(ctx, userID, []string{message.ID})
+	if err != nil {
+		return domain.Message{}, err
+	}
+	message.Attachments = attachmentsByMessageID[message.ID]
 	return message, nil
 }
 
@@ -831,7 +853,8 @@ func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.M
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at, COALESCE(m.reply_to_message_id::text, '')
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at,
+		        COALESCE(m.reply_to_message_id::text, ''), COALESCE(m.is_pinned, false)
 		 FROM messages m
 		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
 		 WHERE wm.user_id = $1 AND m.id = ANY($2)`,
@@ -847,7 +870,7 @@ func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.M
 	for rows.Next() {
 		var message domain.Message
 		var createdAt time.Time
-		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID); err != nil {
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID, &message.IsPinned); err != nil {
 			return nil, err
 		}
 		message.Status = "success"
@@ -856,6 +879,15 @@ func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.M
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	attachmentsByMessageID, err := s.loadAttachmentsByMessageIDs(ctx, userID, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	for messageID, message := range byID {
+		message.Attachments = attachmentsByMessageID[messageID]
+		byID[messageID] = message
 	}
 
 	orderedMessages := make([]domain.Message, 0, len(messageIDs))
@@ -871,6 +903,276 @@ func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.M
 }
 
 /**
+ * ListPinnedMessages loads all pinned messages for one accessible session in pin order.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - sessionID: the active session identifier used for prompt injection.
+ */
+func (s *Store) ListPinnedMessages(userID string, sessionID string) ([]domain.Message, error) {
+	ctx := context.Background()
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT m.id, m.task_id, m.session_id, m.role, m.content_md, m.created_at,
+		        COALESCE(m.reply_to_message_id::text, ''), true
+		 FROM session_context_pins scp
+		 INNER JOIN messages m ON m.id = scp.message_id
+		 INNER JOIN workspace_members wm ON wm.workspace_id = scp.workspace_id
+		 WHERE wm.user_id = $1 AND scp.session_id = $2
+		 ORDER BY m.pinned_at ASC NULLS LAST, m.created_at ASC, m.id ASC`,
+		userID,
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages := []domain.Message{}
+	messageIDs := []string{}
+	for rows.Next() {
+		var message domain.Message
+		var createdAt time.Time
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.SessionID, &message.Role, &message.Content, &createdAt, &message.ReplyToID, &message.IsPinned); err != nil {
+			return nil, err
+		}
+		message.Status = "success"
+		message.TimeLabel = createdAt.Local().Format("15:04")
+		messages = append(messages, message)
+		messageIDs = append(messageIDs, message.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	attachmentsByMessageID, err := s.loadAttachmentsByMessageIDs(ctx, userID, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range messages {
+		messages[index].Attachments = attachmentsByMessageID[messages[index].ID]
+	}
+
+	return messages, nil
+}
+
+/**
+ * SetMessagePin updates the pinned status for one accessible message and synchronizes the session_context_pins table.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - messageID: the selected message identifier.
+ * - isPinned: the target pinned state requested by the user.
+ */
+func (s *Store) SetMessagePin(userID string, messageID string, isPinned bool) (domain.Message, error) {
+	ctx := context.Background()
+	if _, err := s.GetMessageByID(userID, messageID); err != nil {
+		return domain.Message{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Message{}, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	if isPinned {
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO session_context_pins (id, workspace_id, session_id, message_id, created_at)
+			 SELECT $1, m.workspace_id, m.session_id, m.id, $3
+			 FROM messages m
+			 WHERE m.id = $2
+			 ON CONFLICT (session_id, message_id) DO NOTHING`,
+			generateUUID(),
+			messageID,
+			now,
+		)
+		if err != nil {
+			return domain.Message{}, err
+		}
+
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE messages
+			 SET is_pinned = true, pinned_at = COALESCE(pinned_at, $2)
+			 WHERE id = $1`,
+			messageID,
+			now,
+		)
+		if err != nil {
+			return domain.Message{}, err
+		}
+	} else {
+		_, err = tx.ExecContext(ctx, `DELETE FROM session_context_pins WHERE message_id = $1`, messageID)
+		if err != nil {
+			return domain.Message{}, err
+		}
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE messages
+			 SET is_pinned = false, pinned_at = NULL
+			 WHERE id = $1`,
+			messageID,
+		)
+		if err != nil {
+			return domain.Message{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.Message{}, err
+	}
+
+	return s.GetMessageByID(userID, messageID)
+}
+
+/**
+ * GetDraftAttachments loads uploaded attachments that are not yet bound to another message.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - taskID: the owning task identifier.
+ * - sessionID: the owning session identifier.
+ * - attachmentIDs: the uploaded attachment identifiers selected for one message send.
+ */
+func (s *Store) GetDraftAttachments(userID string, taskID string, sessionID string, attachmentIDs []string) ([]domain.Attachment, error) {
+	ctx := context.Background()
+	if len(attachmentIDs) == 0 {
+		return []domain.Attachment{}, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT ta.id, ta.task_id, ta.session_id, COALESCE(ta.message_id::text, ''), ta.file_name, ta.file_type,
+		        ta.source_type, COALESCE(ta.source_url, ''), ta.storage_key
+		 FROM task_attachments ta
+		 INNER JOIN workspace_members wm ON wm.workspace_id = ta.workspace_id
+		 WHERE wm.user_id = $1
+		   AND ta.task_id = $2
+		   AND ta.session_id = $3
+		   AND ta.created_by = $1::uuid
+		   AND ta.id = ANY($4::uuid[])
+		   AND ta.message_id IS NULL`,
+		userID,
+		taskID,
+		sessionID,
+		attachmentIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byID := make(map[string]domain.Attachment, len(attachmentIDs))
+	for rows.Next() {
+		var item domain.Attachment
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.SessionID, &item.MessageID, &item.FileName, &item.FileType, &item.SourceType, &item.SourceURL, &item.StorageKey); err != nil {
+			return nil, err
+		}
+		byID[item.ID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	items := make([]domain.Attachment, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
+		item, ok := byID[attachmentID]
+		if !ok {
+			return nil, errors.New("one or more attachments were not found")
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+/**
+ * CreateAttachment persists one uploaded file or image row for later message binding.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - taskID: the owning task identifier.
+ * - sessionID: the owning session identifier.
+ * - fileName: the original file name shown in the UI.
+ * - fileType: the detected MIME type.
+ * - sourceType: the logical attachment kind, currently image or file.
+ * - storageKey: the absolute local storage path written by the upload handler.
+ */
+func (s *Store) CreateAttachment(userID string, taskID string, sessionID string, fileName string, fileType string, sourceType string, storageKey string) (domain.Attachment, error) {
+	ctx := context.Background()
+	task, err := s.GetTask(userID, taskID)
+	if err != nil {
+		return domain.Attachment{}, err
+	}
+
+	attachmentID := generateUUID()
+	sourceURL := fmt.Sprintf("/api/files/%s", attachmentID)
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO task_attachments (
+		    id, workspace_id, task_id, session_id, message_id, file_name, file_type,
+		    storage_key, source_type, source_url, meta_json, created_by, created_at
+		  )
+		  VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, '{}'::jsonb, $10, $11)`,
+		attachmentID,
+		task.WorkspaceID,
+		taskID,
+		sessionID,
+		fileName,
+		fileType,
+		storageKey,
+		sourceType,
+		sourceURL,
+		userID,
+		now,
+	)
+	if err != nil {
+		return domain.Attachment{}, err
+	}
+
+	return domain.Attachment{
+		ID:         attachmentID,
+		TaskID:     taskID,
+		SessionID:  sessionID,
+		MessageID:  "",
+		FileName:   fileName,
+		FileType:   fileType,
+		SourceType: sourceType,
+		SourceURL:  sourceURL,
+		StorageKey: storageKey,
+	}, nil
+}
+
+/**
+ * GetAttachmentByID loads one uploaded attachment the current user can access.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - attachmentID: the attachment identifier used by render and download flows.
+ */
+func (s *Store) GetAttachmentByID(userID string, attachmentID string) (domain.Attachment, error) {
+	ctx := context.Background()
+	var item domain.Attachment
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT ta.id, ta.task_id, ta.session_id, COALESCE(ta.message_id::text, ''), ta.file_name, ta.file_type,
+		        ta.source_type, COALESCE(ta.source_url, ''), ta.storage_key
+		 FROM task_attachments ta
+		 INNER JOIN workspace_members wm ON wm.workspace_id = ta.workspace_id
+		 WHERE wm.user_id = $1 AND ta.id = $2
+		 LIMIT 1`,
+		userID,
+		attachmentID,
+	).Scan(&item.ID, &item.TaskID, &item.SessionID, &item.MessageID, &item.FileName, &item.FileType, &item.SourceType, &item.SourceURL, &item.StorageKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Attachment{}, errors.New("attachment not found")
+		}
+		return domain.Attachment{}, err
+	}
+	return item, nil
+}
+
+/**
  * CreateMessagePair stores the user message and assistant reply for one task session round.
  * Params:
  * - userID: the authenticated user identifier from the bearer token.
@@ -880,7 +1182,7 @@ func (s *Store) GetMessagesByIDs(userID string, messageIDs []string) ([]domain.M
  * - assistantContent: the assistant reply content.
  * - replyToMessageID: the replied source message identifier when the new user message is a reply action.
  */
-func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string) (domain.Message, domain.Message, error) {
+func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment) (domain.Message, domain.Message, error) {
 	ctx := context.Background()
 	task, err := s.GetTask(userID, taskID)
 	if err != nil {
@@ -905,13 +1207,14 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 	userCreatedAt := now
 	assistantCreatedAt := now.Add(time.Microsecond)
 	userMessage := domain.Message{
-		ID:        generateUUID(),
-		TaskID:    taskID,
-		SessionID: session.ID,
-		Role:      "user",
-		Content:   userContent,
-		Status:    "success",
-		TimeLabel: userCreatedAt.Local().Format("15:04"),
+		ID:          generateUUID(),
+		TaskID:      taskID,
+		SessionID:   session.ID,
+		Role:        "user",
+		Content:     userContent,
+		Status:      "success",
+		TimeLabel:   userCreatedAt.Local().Format("15:04"),
+		Attachments: slices.Clone(attachments),
 	}
 	if replyToMessageID != nil {
 		userMessage.ReplyToID = *replyToMessageID
@@ -948,6 +1251,36 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 	)
 	if err != nil {
 		return domain.Message{}, domain.Message{}, err
+	}
+
+	if len(attachments) > 0 {
+		attachmentIDs := make([]string, 0, len(attachments))
+		for _, attachment := range attachments {
+			attachmentIDs = append(attachmentIDs, attachment.ID)
+		}
+
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE task_attachments
+			 SET message_id = $2
+			 WHERE task_id = $1
+			   AND session_id = $3
+			   AND created_by = $4::uuid
+			   AND id = ANY($5::uuid[])
+			   AND message_id IS NULL`,
+			taskID,
+			userMessage.ID,
+			session.ID,
+			userID,
+			attachmentIDs,
+		)
+		if err != nil {
+			return domain.Message{}, domain.Message{}, err
+		}
+
+		for index := range userMessage.Attachments {
+			userMessage.Attachments[index].MessageID = userMessage.ID
+		}
 	}
 
 	_, err = tx.ExecContext(
@@ -1098,6 +1431,46 @@ func (s *Store) CreateAssistantMessage(userID string, taskID string, sessionID s
 	}
 
 	return assistantMessage, nil
+}
+
+/**
+ * loadAttachmentsByMessageIDs loads message-bound attachments for one accessible message batch.
+ * Params:
+ * - ctx: the request-independent context shared by the parent query flow.
+ * - userID: the authenticated user identifier from the bearer token.
+ * - messageIDs: the message identifiers whose attachments should be attached to the DTO response.
+ */
+func (s *Store) loadAttachmentsByMessageIDs(ctx context.Context, userID string, messageIDs []string) (map[string][]domain.Attachment, error) {
+	itemsByMessageID := make(map[string][]domain.Attachment)
+	if len(messageIDs) == 0 {
+		return itemsByMessageID, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT ta.id, ta.task_id, ta.session_id, COALESCE(ta.message_id::text, ''), ta.file_name, ta.file_type,
+		        ta.source_type, COALESCE(ta.source_url, ''), ta.storage_key
+		 FROM task_attachments ta
+		 INNER JOIN workspace_members wm ON wm.workspace_id = ta.workspace_id
+		 WHERE wm.user_id = $1 AND ta.message_id = ANY($2::uuid[])
+		 ORDER BY ta.created_at ASC, ta.id ASC`,
+		userID,
+		messageIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item domain.Attachment
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.SessionID, &item.MessageID, &item.FileName, &item.FileType, &item.SourceType, &item.SourceURL, &item.StorageKey); err != nil {
+			return nil, err
+		}
+		itemsByMessageID[item.MessageID] = append(itemsByMessageID[item.MessageID], item)
+	}
+
+	return itemsByMessageID, rows.Err()
 }
 
 /**

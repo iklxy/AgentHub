@@ -21,12 +21,15 @@ func NewRouter(logger *slog.Logger, handlers *Handlers) http.Handler {
 	mux.HandleFunc("POST /api/register", handlers.Register)
 	mux.HandleFunc("POST /api/login", handlers.Login)
 	mux.HandleFunc("GET /api/me", handlers.Me)
+	mux.HandleFunc("POST /api/files/upload", handlers.UploadFiles)
+	mux.HandleFunc("GET /api/files/", handlers.GetFile)
 	mux.HandleFunc("GET /api/workspace", handlers.GetWorkspace)
 	mux.HandleFunc("PATCH /api/workspace", handlers.UpdateWorkspace)
 	mux.HandleFunc("GET /api/tasks", handlers.ListTasks)
 	mux.HandleFunc("POST /api/tasks", handlers.CreateTask)
 	mux.HandleFunc("GET /api/agents", handlers.ListAgents)
 	mux.HandleFunc("POST /api/messages/quote", handlers.CreateQuotedMessage)
+	mux.HandleFunc("DELETE /api/messages/", routeMessageResources(handlers))
 	mux.HandleFunc("POST /api/sessions", handlers.CreateSession)
 	mux.HandleFunc("GET /api/sessions/", routeSessionResources(handlers))
 	mux.HandleFunc("PATCH /api/sessions/", routeSessionResources(handlers))
@@ -46,6 +49,8 @@ func routeMessageResources(handlers *Handlers) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch request.Method {
 		case http.MethodPost:
+			handlers.CreateMessageFromAction(writer, request)
+		case http.MethodDelete:
 			handlers.CreateMessageFromAction(writer, request)
 		default:
 			WriteError(writer, http.StatusMethodNotAllowed, "method not allowed")

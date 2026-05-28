@@ -55,6 +55,20 @@ export type AgentOption = {
   providerType: string;
 };
 
+export type AttachmentSourceType = "file" | "image";
+
+export type Attachment = {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  messageId: string;
+  fileName: string;
+  fileType: string;
+  sourceType: AttachmentSourceType;
+  sourceUrl: string;
+  storageKey: string;
+};
+
 export type MessageRole = "user" | "assistant" | "system";
 
 export type Message = {
@@ -65,4 +79,6 @@ export type Message = {
   content: string;
   timeLabel: string;
   replyToMessageId: string;
+  isPinned: boolean;
+  attachments: Attachment[];
 };
