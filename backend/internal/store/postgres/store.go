@@ -749,7 +749,13 @@ func (s *Store) ListMessages(userID string, taskID string, sessionID string) ([]
 		 FROM messages m
 		 INNER JOIN workspace_members wm ON wm.workspace_id = m.workspace_id
 		 WHERE wm.user_id = $1 AND m.task_id = $2 AND m.session_id = $3
-		 ORDER BY m.created_at ASC`,
+		 ORDER BY m.created_at ASC,
+		          CASE m.role
+		            WHEN 'user' THEN 0
+		            WHEN 'assistant' THEN 1
+		            ELSE 2
+		          END ASC,
+		          m.id ASC`,
 		userID,
 		taskID,
 		sessionID,
@@ -896,6 +902,8 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
+	userCreatedAt := now
+	assistantCreatedAt := now.Add(time.Microsecond)
 	userMessage := domain.Message{
 		ID:        generateUUID(),
 		TaskID:    taskID,
@@ -903,7 +911,7 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		Role:      "user",
 		Content:   userContent,
 		Status:    "success",
-		TimeLabel: now.Local().Format("15:04"),
+		TimeLabel: userCreatedAt.Local().Format("15:04"),
 	}
 	if replyToMessageID != nil {
 		userMessage.ReplyToID = *replyToMessageID
@@ -916,7 +924,7 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		Role:      "assistant",
 		Content:   assistantContent,
 		Status:    "success",
-		TimeLabel: now.Local().Format("15:04"),
+		TimeLabel: assistantCreatedAt.Local().Format("15:04"),
 	}
 
 	_, err = tx.ExecContext(
@@ -936,7 +944,7 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		"text",
 		userContent,
 		userMessage.ReplyToID,
-		now,
+		userCreatedAt,
 	)
 	if err != nil {
 		return domain.Message{}, domain.Message{}, err
@@ -957,7 +965,7 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 		"assistant",
 		"text",
 		assistantContent,
-		now,
+		assistantCreatedAt,
 	)
 	if err != nil {
 		return domain.Message{}, domain.Message{}, err
@@ -995,6 +1003,101 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 	}
 
 	return userMessage, assistantMessage, nil
+}
+
+/**
+ * CreateAssistantMessage stores one assistant-only message for regenerate actions and refreshes session activity metadata.
+ * Params:
+ * - userID: the authenticated user identifier from the bearer token.
+ * - taskID: the task identifier from the request path.
+ * - sessionID: the session identifier bound to the active chat view.
+ * - assistantContent: the regenerated assistant content.
+ */
+func (s *Store) CreateAssistantMessage(userID string, taskID string, sessionID string, assistantContent string) (domain.Message, error) {
+	ctx := context.Background()
+	task, err := s.GetTask(userID, taskID)
+	if err != nil {
+		return domain.Message{}, err
+	}
+
+	session, err := s.GetSession(userID, sessionID)
+	if err != nil {
+		return domain.Message{}, err
+	}
+	if session.TaskID != taskID {
+		return domain.Message{}, errors.New("session does not belong to the task")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Message{}, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	assistantMessage := domain.Message{
+		ID:        generateUUID(),
+		TaskID:    taskID,
+		SessionID: session.ID,
+		Role:      "assistant",
+		Content:   assistantContent,
+		Status:    "success",
+		TimeLabel: now.Local().Format("15:04"),
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO messages (
+		    id, workspace_id, task_id, session_id, sender_type, role,
+		    message_type, content_md, created_at
+		  )
+		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		assistantMessage.ID,
+		task.WorkspaceID,
+		taskID,
+		session.ID,
+		"agent",
+		"assistant",
+		"text",
+		assistantContent,
+		now,
+	)
+	if err != nil {
+		return domain.Message{}, err
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET status = 'running', current_session_id = $2, current_primary_agent_id = NULLIF($3, '')::uuid, updated_at = $4
+		 WHERE id = $1`,
+		taskID,
+		session.ID,
+		session.PrimaryAgentID,
+		now,
+	)
+	if err != nil {
+		return domain.Message{}, err
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`UPDATE task_sessions
+		 SET last_active_at = $2, last_message_at = $2, last_message_preview = $3, updated_at = $2, started_at = COALESCE(started_at, $2)
+		 WHERE id = $1`,
+		session.ID,
+		now,
+		assistantContent,
+	)
+	if err != nil {
+		return domain.Message{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.Message{}, err
+	}
+
+	return assistantMessage, nil
 }
 
 /**

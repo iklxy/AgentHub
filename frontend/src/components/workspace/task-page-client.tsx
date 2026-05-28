@@ -3,7 +3,7 @@
 
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { AgentColumn } from "@/components/workspace/agent-column";
@@ -24,6 +24,7 @@ import {
   getTasks,
   getWorkspace,
   quoteMessage,
+  regenerateMessage,
   replyMessage,
   updateSession,
 } from "@/lib/api";
@@ -100,12 +101,14 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
     mode: "quote" | "reply";
     messages: Message[];
   } | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [sessionDraft, setSessionDraft] = useState({
     title: "",
     chatMode: "single" as const,
     primaryAgentId: "",
   });
+  const activeSessionIdRef = useRef("");
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -141,6 +144,10 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
       }
     });
   }, [router, taskId]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (!token || !activeSessionId) {
@@ -235,6 +242,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
         {activeSession ? (
           <ChatColumn
             errorMessage={errorMessage}
+            isRegenerating={isRegenerating && activeSessionIdRef.current === activeSession.id}
             isSending={isPending}
             messages={messages}
             onSendMessage={(content) => {
@@ -332,6 +340,65 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
                   mode: "quote",
                   messages: [...current.messages, normalizedMessage],
                 };
+              });
+            }}
+            onRegenerateMessage={(message) => {
+              if (isRegenerating) {
+                return;
+              }
+
+              setErrorMessage("");
+              setIsRegenerating(true);
+              const targetSessionID = activeSession.id;
+
+              startTransition(async () => {
+                try {
+                  const response = await regenerateMessage(token, message.id);
+                  if (activeSessionIdRef.current === targetSessionID) {
+                    setMessages((current) => [...current, response.assistantMessage]);
+                  }
+                  setTask((current) =>
+                    current
+                      ? {
+                          ...current,
+                          status: "running",
+                          currentSessionId: activeSession.id,
+                          updatedAtLabel: "刚刚",
+                        }
+                      : current,
+                  );
+                  setTasks((current) =>
+                    current.map((item) =>
+                        item.id === task.id
+                        ? {
+                            ...item,
+                            status: "running",
+                            currentSessionId: targetSessionID,
+                            updatedAtLabel: "刚刚",
+                          }
+                        : item,
+                    ),
+                  );
+                  setSessions((current) =>
+                    sortSessions(
+                      current.map((item) =>
+                        item.id === targetSessionID
+                          ? {
+                              ...item,
+                              startedAt: item.startedAt || new Date().toISOString(),
+                              lastActiveAt: new Date().toISOString(),
+                              lastActiveAtLabel: "刚刚",
+                              lastMessagePreview: response.assistantMessage.content,
+                            }
+                          : item,
+                      ),
+                    ),
+                  );
+                } catch (error) {
+                  setErrorMessage(error instanceof Error ? error.message : "重新生成失败");
+                } finally {
+                  setIsRegenerating(false);
+                }
               });
             }}
             onReplyMessage={(message) => {

@@ -691,48 +691,55 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *http.Request) {
 	userID, authErr := getAuthenticatedUserID(request)
 	if authErr != nil {
-		h.logFailure(request, "message_reply_auth_user", authErr)
+		h.logFailure(request, "message_action_auth_user", authErr)
 		WriteError(writer, http.StatusUnauthorized, authErr.Error())
 		return
 	}
 
 	messageID, action, err := parseMessageActionRoute(request.URL.Path)
 	if err != nil {
-		h.logFailure(request, "message_reply_parse_route", err, "userId", userID)
+		h.logFailure(request, "message_action_parse_route", err, "userId", userID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if action != "reply" {
+	if action != "reply" && action != "regenerate" {
 		WriteError(writer, http.StatusBadRequest, "invalid message action")
 		return
 	}
 
 	var input domain.CreateDerivedMessageRequest
-	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		h.logFailure(request, "message_reply_decode", err, "userId", userID, "messageId", messageID)
-		WriteError(writer, http.StatusBadRequest, "invalid reply payload")
-		return
+	if action == "reply" {
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			h.logFailure(request, "message_reply_decode", err, "userId", userID, "messageId", messageID)
+			WriteError(writer, http.StatusBadRequest, "invalid reply payload")
+			return
+		}
 	}
 
 	sourceMessage, err := h.Store.GetMessageByID(userID, messageID)
 	if err != nil {
-		h.logFailure(request, "message_reply_get_source", err, "userId", userID, "messageId", messageID)
+		h.logFailure(request, "message_action_get_source", err, "userId", userID, "messageId", messageID, "action", action)
 		WriteError(writer, http.StatusNotFound, err.Error())
 		return
 	}
 
 	task, err := h.Store.GetTask(userID, sourceMessage.TaskID)
 	if err != nil {
-		h.logFailure(request, "message_reply_get_task", err, "userId", userID, "taskId", sourceMessage.TaskID, "messageId", messageID)
+		h.logFailure(request, "message_action_get_task", err, "userId", userID, "taskId", sourceMessage.TaskID, "messageId", messageID, "action", action)
 		WriteError(writer, http.StatusNotFound, err.Error())
 		return
 	}
 
 	session, err := h.Store.GetSession(userID, sourceMessage.SessionID)
 	if err != nil {
-		h.logFailure(request, "message_reply_get_session", err, "userId", userID, "sessionId", sourceMessage.SessionID, "messageId", messageID)
+		h.logFailure(request, "message_action_get_session", err, "userId", userID, "sessionId", sourceMessage.SessionID, "messageId", messageID, "action", action)
 		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if action == "regenerate" {
+		h.handleRegenerateMessage(writer, request, userID, task, session, sourceMessage)
 		return
 	}
 
@@ -776,6 +783,61 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 }
 
 /**
+ * handleRegenerateMessage reruns the active agent for one assistant message and appends the regenerated answer.
+ * Params:
+ * - writer: the HTTP response writer.
+ * - request: the incoming HTTP request that triggered the regenerate action.
+ * - userID: the authenticated user identifier from the bearer token.
+ * - task: the task that owns the selected source message.
+ * - session: the session that owns the selected source message.
+ * - sourceMessage: the assistant message selected for regeneration.
+ */
+func (h *Handlers) handleRegenerateMessage(
+	writer http.ResponseWriter,
+	request *http.Request,
+	userID string,
+	task domain.Task,
+	session domain.Session,
+	sourceMessage domain.Message,
+) {
+	if sourceMessage.Role != "assistant" {
+		WriteError(writer, http.StatusBadRequest, "only assistant messages can be regenerated")
+		return
+	}
+
+	composedPrompt := buildRegeneratePrompt(sourceMessage)
+	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	if err != nil {
+		h.logFailure(
+			request,
+			"message_regenerate_run_agent",
+			err,
+			"userId", userID,
+			"taskId", task.ID,
+			"sessionId", session.ID,
+			"sourceMessageId", sourceMessage.ID,
+		)
+		if errors.Is(err, agent.ErrRuntimeNotImplemented) {
+			WriteError(writer, http.StatusNotImplemented, err.Error())
+			return
+		}
+		WriteError(writer, http.StatusBadGateway, "agent execution failed")
+		return
+	}
+
+	assistantMessage, err := h.Store.CreateAssistantMessage(userID, task.ID, session.ID, assistantContent)
+	if err != nil {
+		h.logFailure(request, "message_regenerate_store", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	WriteJSON(writer, http.StatusCreated, map[string]domain.Message{
+		"assistantMessage": assistantMessage,
+	})
+}
+
+/**
  * buildQuotedPrompt creates the agent-facing prompt for one multi-message quote action.
  * Params:
  * - sourceMessages: the quoted messages selected by the user in display order.
@@ -803,6 +865,17 @@ func buildQuotedPrompt(sourceMessages []domain.Message, userContent string) stri
 func buildReplyPrompt(sourceMessage domain.Message, userContent string) (string, *string) {
 	replyToID := sourceMessage.ID
 	return fmt.Sprintf("请基于以下消息继续回答：\n%s\n\n用户回复内容：\n%s", sourceMessage.Content, userContent), &replyToID
+}
+
+/**
+ * buildRegeneratePrompt creates the agent-facing prompt for one assistant-message regeneration action.
+ * Params:
+ * - sourceMessage: the assistant message selected by the user for regeneration.
+ * Returns:
+ * - the composed prompt sent to the active agent.
+ */
+func buildRegeneratePrompt(sourceMessage domain.Message) string {
+	return fmt.Sprintf("针对该条消息%s，重新生成答案。", sourceMessage.Content)
 }
 
 /**

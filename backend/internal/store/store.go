@@ -24,4 +24,5 @@ type Repository interface {
 	GetMessageByID(userID string, messageID string) (domain.Message, error)
 	GetMessagesByIDs(userID string, messageIDs []string) ([]domain.Message, error)
 	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string) (domain.Message, domain.Message, error)
+	CreateAssistantMessage(userID string, taskID string, sessionID string, assistantContent string) (domain.Message, error)
 }

@@ -60,6 +60,10 @@ type MessageRoundResponse = {
   assistantMessage: Message;
 };
 
+type RegenerateMessageResponse = {
+  assistantMessage: Message;
+};
+
 /**
  * Executes an HTTP request against the AgentHub backend.
  * @param path The API path appended to the configured backend base URL.
@@ -303,5 +307,19 @@ export function replyMessage(token: string, messageId: string, payload: CreateMe
     method: "POST",
     token,
     body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Regenerates one assistant message and appends the new assistant answer to the current session.
+ * @param token The bearer token stored in the browser.
+ * @param messageId The assistant message identifier selected in the transcript.
+ * @returns The regenerated assistant message created by the backend.
+ */
+export function regenerateMessage(token: string, messageId: string): Promise<RegenerateMessageResponse> {
+  return request<RegenerateMessageResponse>(`/api/messages/${messageId}/regenerate`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({}),
   });
 }

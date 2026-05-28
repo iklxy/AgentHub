@@ -3,7 +3,7 @@
 
 "use client";
 
-import { Check, Copy, CornerDownLeft, Quote } from "lucide-react";
+import { Check, Copy, CornerDownLeft, Quote, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -93,17 +93,23 @@ async function copyCodeBlock(value: string): Promise<void> {
  * - props.message: the message entity rendered in the transcript.
  * - props.onQuote: optional callback that starts one quote action from the current message.
  * - props.onReply: optional callback that starts one reply action from the current message.
+ * - props.onRegenerate: optional callback that reruns the selected assistant message.
+ * - props.isRegenerating: whether the regenerate action is currently blocked by an in-flight request.
  * Returns:
  * - the message bubble element.
  */
 export function MessageBubble({
   message,
+  isRegenerating = false,
   onQuote,
   onReply,
+  onRegenerate,
 }: {
   message: Message;
+  isRegenerating?: boolean;
   onQuote?: (message: Message) => void;
   onReply?: (message: Message) => void;
+  onRegenerate?: (message: Message) => void;
 }): JSX.Element {
   const [copiedBlockKey, setCopiedBlockKey] = useState<string | null>(null);
   const isUser = message.role === "user";
@@ -212,6 +218,18 @@ export function MessageBubble({
                 variant="ghost"
               >
                 <CornerDownLeft className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+            {onRegenerate && message.role === "assistant" ? (
+              <Button
+                className={cn(isUser ? "text-paper/72 hover:bg-white/12 hover:text-paper" : "text-ink/48 hover:text-ink")}
+                disabled={isRegenerating}
+                onClick={() => onRegenerate(message)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             ) : null}
           </div>

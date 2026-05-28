@@ -14,12 +14,14 @@ import type { Message, Session, Task } from "@/types/domain";
 /**
  * Renders the right-side chat workspace for a selected task session.
  * @param props.errorMessage Optional status text shown above the input area.
+ * @param props.isRegenerating Whether one regenerate request is currently running.
  * @param props.isSending Whether the current task session is waiting for an assistant reply.
  * @param props.messages The ordered message list rendered inside the transcript.
  * @param props.messageOperation Optional active quote or reply context for the composer.
  * @param props.onClearMessageOperation Clears the active quote or reply context.
  * @param props.onQuoteMessage Starts a quote action from one transcript message.
  * @param props.onReplyMessage Starts a reply action from one transcript message.
+ * @param props.onRegenerateMessage Reruns one assistant message inside the current session.
  * @param props.onSendMessage The callback executed when the user submits a message.
  * @param props.session The active task session displayed in this chat column.
  * @param props.task The active task that owns the current session.
@@ -27,17 +29,20 @@ import type { Message, Session, Task } from "@/types/domain";
  */
 export function ChatColumn({
   errorMessage,
+  isRegenerating,
   isSending,
   messages,
   messageOperation,
   onClearMessageOperation,
   onQuoteMessage,
   onReplyMessage,
+  onRegenerateMessage,
   onSendMessage,
   session,
   task,
 }: {
   errorMessage?: string;
+  isRegenerating: boolean;
   isSending: boolean;
   messages: Message[];
   messageOperation?: {
@@ -47,6 +52,7 @@ export function ChatColumn({
   onClearMessageOperation?: () => void;
   onQuoteMessage: (message: Message) => void;
   onReplyMessage: (message: Message) => void;
+  onRegenerateMessage: (message: Message) => void;
   onSendMessage: (content: string) => void;
   session: Session;
   task: Task;
@@ -58,7 +64,7 @@ export function ChatColumn({
       behavior: "smooth",
       block: "end",
     });
-  }, [messages, session.id]);
+  }, [isRegenerating, messages, session.id]);
 
   return (
     <Panel className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -91,13 +97,27 @@ export function ChatColumn({
         ) : (
           messages.map((message) => (
             <MessageBubble
+              isRegenerating={isRegenerating}
               key={message.id}
               message={message}
               onQuote={onQuoteMessage}
+              onRegenerate={onRegenerateMessage}
               onReply={onReplyMessage}
             />
           ))
         )}
+        {isRegenerating ? (
+          <div className="flex justify-start">
+            <div className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm text-ink/62 shadow-sm">
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-pine [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-pine [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-pine" />
+              </span>
+              <span>正在重新生成...</span>
+            </div>
+          </div>
+        ) : null}
         <div aria-hidden="true" ref={endAnchorRef} />
       </div>
 
