@@ -31,6 +31,8 @@ func NewRouter(logger *slog.Logger, handlers *Handlers) http.Handler {
 	mux.HandleFunc("POST /api/messages/quote", handlers.CreateQuotedMessage)
 	mux.HandleFunc("DELETE /api/messages/", routeMessageResources(handlers))
 	mux.HandleFunc("POST /api/sessions", handlers.CreateSession)
+	mux.HandleFunc("GET /api/sessions/{sessionId}/permissions/events", handlers.PermissionEvents)
+	mux.HandleFunc("POST /api/sessions/{sessionId}/permissions/{requestId}/respond", handlers.RespondToPermission)
 	mux.HandleFunc("GET /api/sessions/", routeSessionResources(handlers))
 	mux.HandleFunc("PATCH /api/sessions/", routeSessionResources(handlers))
 	mux.HandleFunc("POST /api/messages/", routeMessageResources(handlers))

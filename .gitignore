@@ -24,3 +24,4 @@ agent/.mypy_cache
 .codex
 .AgentHub/.Galaxy/workspace/
 .AgentHub/.Aries/workspace/
+/.vscode/

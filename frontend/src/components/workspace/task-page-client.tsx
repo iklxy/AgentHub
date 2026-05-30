@@ -26,10 +26,13 @@ import {
   quoteMessage,
   regenerateMessage,
   replyMessage,
+  respondToPermission,
+  subscribePermissions,
   toggleMessagePin,
   uploadAttachments,
   updateSession,
 } from "@/lib/api";
+import type { PermissionRequest } from "@/lib/api";
 import { clearStoredToken, getStoredToken } from "@/lib/auth";
 import type { AgentOption, Attachment, Message, Session, Task, User, Workspace } from "@/types/domain";
 
@@ -115,7 +118,10 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
     chatMode: "single" as const,
     primaryAgentId: "",
   });
+  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
+  const [isSubmittingPermission, setIsSubmittingPermission] = useState(false);
   const activeSessionIdRef = useRef("");
+  const permissionCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -155,6 +161,28 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (permissionCleanupRef.current) {
+      permissionCleanupRef.current();
+      permissionCleanupRef.current = null;
+    }
+    setPendingPermission(null);
+
+    if (!token || !activeSessionId) {
+      return;
+    }
+
+    const cleanup = subscribePermissions(token, activeSessionId, (request) => {
+      setPendingPermission(request);
+    });
+    permissionCleanupRef.current = cleanup;
+
+    return () => {
+      cleanup();
+      permissionCleanupRef.current = null;
+    };
+  }, [activeSessionId, token]);
 
   useEffect(() => {
     if (!token || !activeSessionId) {
@@ -214,6 +242,11 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             setMessages([]);
             setMessageOperation(null);
             setPendingAttachments([]);
+            setPendingPermission(null);
+            if (permissionCleanupRef.current) {
+              permissionCleanupRef.current();
+              permissionCleanupRef.current = null;
+            }
             setActiveSessionId(sessionId);
           }}
           onTogglePin={(sessionId, nextPinned) => {
@@ -252,9 +285,30 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             errorMessage={errorMessage}
             isRegenerating={isRegenerating && activeSessionIdRef.current === activeSession.id}
             isPinUpdating={isPinUpdating}
+            isSubmittingPermission={isSubmittingPermission}
             isUploadingAttachments={isUploadingAttachments}
             isSending={isPending}
             messages={messages}
+            onAllowPermission={(requestId, updatedInput) => {
+              setIsSubmittingPermission(true);
+              respondToPermission(token, activeSession.id, requestId, {
+                behavior: "allow",
+                updatedInput,
+              })
+                .then(() => setPendingPermission(null))
+                .catch((error) => setErrorMessage(error instanceof Error ? error.message : "审批提交失败"))
+                .finally(() => setIsSubmittingPermission(false));
+            }}
+            onDenyPermission={(requestId, message) => {
+              setIsSubmittingPermission(true);
+              respondToPermission(token, activeSession.id, requestId, {
+                behavior: "deny",
+                message,
+              })
+                .then(() => setPendingPermission(null))
+                .catch((error) => setErrorMessage(error instanceof Error ? error.message : "审批提交失败"))
+                .finally(() => setIsSubmittingPermission(false));
+            }}
             onSendMessage={(content) => {
               setErrorMessage("");
               const currentMessageOperation = messageOperation;
@@ -341,6 +395,7 @@ export function TaskPageClient({ taskId }: { taskId: string }): JSX.Element {
             }}
             messageOperation={messageOperation}
             pendingAttachments={pendingAttachments}
+            pendingPermission={pendingPermission}
             onClearMessageOperation={() => setMessageOperation(null)}
             onRemovePendingAttachment={(attachmentId) => {
               setPendingAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));

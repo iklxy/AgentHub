@@ -23,9 +23,10 @@ import (
 
 // Handlers groups the dependencies used by the HTTP layer.
 type Handlers struct {
-	Logger       *slog.Logger
-	Store        store.Repository
-	AgentService *agent.Service
+	Logger           *slog.Logger
+	Store            store.Repository
+	AgentService     *agent.Service
+	PermissionBroker *agent.PermissionBroker
 }
 
 func (h *Handlers) logFailure(request *http.Request, operation string, err error, attrs ...any) {
@@ -726,7 +727,7 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.runAgentLoop(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -829,7 +830,7 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 		return
 	}
 
-	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.runAgentLoop(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -940,7 +941,7 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.runAgentLoop(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -1002,7 +1003,7 @@ func (h *Handlers) handleRegenerateMessage(
 		return
 	}
 
-	assistantContent, _, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, _, err := h.runAgentLoop(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -1295,4 +1296,196 @@ func detectUploadedFileType(file multipart.File, fallbackType string) (string, e
 	}
 
 	return detectedType, nil
+}
+
+/**
+ * runAgentLoop starts the agent and manages the permission approval loop until the agent finishes.
+ */
+func (h *Handlers) runAgentLoop(task domain.Task, session domain.Session, composedPrompt string) (string, string, error) {
+	agentSession, err := h.AgentService.StartAgent(task, session, composedPrompt)
+	if err != nil {
+		return "", "", err
+	}
+	defer agentSession.Close()
+
+	var assistantContent, newSDKSessionID string
+	for {
+		msg, readErr := agentSession.ReadMessage()
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return "", "", readErr
+		}
+
+		if msg.Type == "permission_request" {
+			sseReq := buildSSERequest(msg, session.ID)
+			resp := h.PermissionBroker.WaitForResponse(session.ID, sseReq)
+			if writeErr := agentSession.WriteResponse(permissionResponseFromFrontend(resp)); writeErr != nil {
+				h.Logger.Error("write permission response failed", "error", writeErr, "requestId", msg.RequestID)
+			}
+			continue
+		}
+
+		if msg.Type == "agent_result" {
+			assistantContent = strings.TrimSpace(msg.Result)
+			newSDKSessionID = msg.SessionID
+			break
+		}
+	}
+
+	if assistantContent == "" {
+		return "", "", errors.New("agent returned empty output")
+	}
+
+	return assistantContent, newSDKSessionID, nil
+}
+
+/**
+ * PermissionEvents streams permission requests to the frontend via SSE.
+ */
+func (h *Handlers) PermissionEvents(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserIDFromQuery(request)
+	if authErr != nil {
+		h.logFailure(request, "permission_events_auth", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	sessionID, err := parsePermissionSessionRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "permission_events_parse", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	_, err = h.Store.GetSession(userID, sessionID)
+	if err != nil {
+		h.logFailure(request, "permission_events_get_session", err, "userId", userID, "sessionId", sessionID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		WriteError(writer, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch, cancel := h.PermissionBroker.Subscribe(sessionID)
+	defer cancel()
+
+	ctx := request.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sseReq, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(sseReq)
+			fmt.Fprintf(writer, "event: permission_request\ndata: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+/**
+ * RespondToPermission processes a frontend permission decision.
+ */
+func (h *Handlers) RespondToPermission(writer http.ResponseWriter, request *http.Request) {
+	userID, authErr := getAuthenticatedUserID(request)
+	if authErr != nil {
+		h.logFailure(request, "permission_respond_auth", authErr)
+		WriteError(writer, http.StatusUnauthorized, authErr.Error())
+		return
+	}
+
+	sessionID, requestID, err := parsePermissionRespondRoute(request.URL.Path)
+	if err != nil {
+		h.logFailure(request, "permission_respond_parse", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	_, err = h.Store.GetSession(userID, sessionID)
+	if err != nil {
+		h.logFailure(request, "permission_respond_get_session", err, "userId", userID, "sessionId", sessionID)
+		WriteError(writer, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var input agent.FrontendResponse
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		h.logFailure(request, "permission_respond_decode", err, "userId", userID)
+		WriteError(writer, http.StatusBadRequest, "invalid permission response payload")
+		return
+	}
+
+	if input.Behavior != "allow" && input.Behavior != "deny" {
+		WriteError(writer, http.StatusBadRequest, "behavior must be allow or deny")
+		return
+	}
+
+	h.PermissionBroker.Respond(requestID, agent.PermissionResponse{
+		Type:         "permission_response",
+		RequestID:    requestID,
+		Behavior:     input.Behavior,
+		UpdatedInput: input.UpdatedInput,
+		Message:      input.Message,
+	})
+
+	WriteJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func buildSSERequest(msg *agent.AgentMessage, sessionID string) agent.SSERequest {
+	return agent.SSERequest{
+		RequestID: msg.RequestID,
+		SessionID: sessionID,
+		ToolName:  msg.ToolName,
+		Input:     msg.Input,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func permissionResponseFromFrontend(resp agent.PermissionResponse) agent.PermissionResponse {
+	return agent.PermissionResponse{
+		Type:         "permission_response",
+		RequestID:    resp.RequestID,
+		Behavior:     resp.Behavior,
+		UpdatedInput: resp.UpdatedInput,
+		Message:      resp.Message,
+	}
+}
+
+/**
+ * parsePermissionSessionRoute extracts the session identifier from /api/sessions/{sessionId}/permissions/events.
+ */
+func parsePermissionSessionRoute(path string) (string, error) {
+	trimmed := strings.TrimPrefix(path, "/api/sessions/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) < 3 || parts[0] == "" || parts[1] != "permissions" || parts[2] != "events" {
+		return "", errorsNew("invalid permission events route")
+	}
+	return parts[0], nil
+}
+
+/**
+ * parsePermissionRespondRoute extracts session and request IDs from
+ * /api/sessions/{sessionId}/permissions/{requestId}/respond.
+ */
+func parsePermissionRespondRoute(path string) (string, string, error) {
+	trimmed := strings.TrimPrefix(path, "/api/sessions/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) < 4 || parts[0] == "" || parts[1] != "permissions" || parts[3] != "respond" {
+		return "", "", errorsNew("invalid permission respond route")
+	}
+	return parts[0], parts[2], nil
 }

@@ -39,10 +39,12 @@ func New() (*App, error) {
 
 	agentCodeDir, pythonPath, harnessRoot := agent.ResolveAgentPaths(cfg.AgentRootDir)
 	agentService := agent.NewService(logger, agentCodeDir, harnessRoot, pythonPath, cfg.PythonBin)
+	permissionBroker := agent.NewPermissionBroker(logger)
 	handlers := &httpx.Handlers{
-		Logger:       logger,
-		Store:        store,
-		AgentService: agentService,
+		Logger:           logger,
+		Store:            store,
+		AgentService:     agentService,
+		PermissionBroker: permissionBroker,
 	}
 
 	server := &http.Server{

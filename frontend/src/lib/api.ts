@@ -419,3 +419,70 @@ export function toggleMessagePin(token: string, messageId: string, isPinned: boo
     token,
   }).then(normalizeMessage);
 }
+
+/**
+ * Permission request shape pushed from backend via SSE.
+ */
+export type PermissionRequest = {
+  requestId: string;
+  sessionId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  createdAt: string;
+};
+
+/**
+ * Permission decision payload sent from frontend to backend.
+ */
+export type PermissionDecision = {
+  behavior: "allow" | "deny";
+  updatedInput?: Record<string, unknown>;
+  message?: string;
+};
+
+/**
+ * Subscribes to permission requests for a session via SSE.
+ * @param token The bearer token stored in the browser.
+ * @param sessionId The active session identifier.
+ * @param onRequest Callback invoked with each incoming permission request.
+ * @returns A cleanup function that closes the SSE connection.
+ */
+export function subscribePermissions(
+  token: string,
+  sessionId: string,
+  onRequest: (request: PermissionRequest) => void,
+): () => void {
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/permissions/events`;
+  const eventSource = new EventSource(`${url}?token=${encodeURIComponent(token)}`);
+
+  eventSource.addEventListener("permission_request", (event: MessageEvent) => {
+    try {
+      const request = JSON.parse(event.data) as PermissionRequest;
+      onRequest(request);
+    } catch {
+      // Ignore malformed events
+    }
+  });
+
+  return () => eventSource.close();
+}
+
+/**
+ * Sends a permission decision back to the backend.
+ * @param token The bearer token stored in the browser.
+ * @param sessionId The active session identifier.
+ * @param requestId The permission request identifier.
+ * @param decision The allow/deny decision.
+ */
+export async function respondToPermission(
+  token: string,
+  sessionId: string,
+  requestId: string,
+  decision: PermissionDecision,
+): Promise<void> {
+  await request(`/api/sessions/${sessionId}/permissions/${requestId}/respond`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(decision),
+  });
+}

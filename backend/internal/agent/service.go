@@ -4,11 +4,12 @@
 package agent
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -18,11 +19,6 @@ import (
 
 	"github.com/lixinyang/agenthub/backend/internal/domain"
 )
-
-type sdkOutput struct {
-	Result    string `json:"result"`
-	SessionID string `json:"session_id"`
-}
 
 // Service wraps the Python agent entrypoint for session-aware execution.
 type Service struct {
@@ -44,6 +40,14 @@ type harnessMeta struct {
 	RuntimeProvider  string `json:"runtimeProvider"`
 	RuntimeSessionID string `json:"runtimeSessionId"`
 	UpdatedAt        string `json:"updatedAt"`
+}
+
+// AgentSession manages a running Python agent process with bidirectional JSONL communication.
+type AgentSession struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Scanner
+	logger *slog.Logger
 }
 
 // ErrRuntimeNotImplemented marks an agent runtime target that is not yet supported by the current backend.
@@ -70,23 +74,18 @@ func NewService(logger *slog.Logger, codeWorkDir string, harnessRoot string, pyt
 }
 
 /**
- * RunSessionAgent executes the Python agent entrypoint via the Claude Agent SDK and returns the assistant output.
+ * StartAgent launches the Python agent process with bidirectional pipes for permission approval.
  * Params:
  * - task: the task metadata used to build the execution context.
  * - session: the active task session bound to the current chat round.
  * - userInput: the latest user message content.
  * Returns:
- * - assistantContent: the agent response text.
- * - newSDKSessionID: the SDK-generated session ID on first call, empty on subsequent calls.
- * - err: execution error if any.
+ * - an AgentSession for reading messages and writing responses.
  */
-func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, userInput string) (string, string, error) {
+func (s *Service) StartAgent(task domain.Task, session domain.Session, userInput string) (*AgentSession, error) {
 	if !supportsClaudeCodeRuntime(session.RuntimeProvider) {
-		return "", "", fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.RuntimeProvider)
+		return nil, fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.RuntimeProvider)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	defer cancel()
 
 	resumeSessionID := strings.TrimSpace(session.RuntimeSessionKey)
 	runtimeSessionID := resumeSessionID
@@ -96,89 +95,113 @@ func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, user
 
 	agentWorkDir, ruleFile, err := s.ensureHarness(session, task, runtimeSessionID)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
 	args := []string{
-		"-m",
-		"agenthub_agent.main",
-		"--agent-name",
-		session.PrimaryAgentName,
-		"--session-id",
-		runtimeSessionID,
-		"--agent-workdir",
-		agentWorkDir,
-		"--agent-rule-file",
-		ruleFile,
-		"--task-title",
-		task.Title,
-		"--task-description",
-		task.Description,
-		"--session-title",
-		session.Title,
-		"--user-input",
-		userInput,
+		"-m", "agenthub_agent.main",
+		"--agent-name", session.PrimaryAgentName,
+		"--session-id", runtimeSessionID,
+		"--agent-workdir", agentWorkDir,
+		"--agent-rule-file", ruleFile,
+		"--task-title", task.Title,
+		"--task-description", task.Description,
+		"--session-title", session.Title,
+		"--user-input", userInput,
 	}
 
 	if resumeSessionID != "" {
 		args = append(args, "--resume-session-id", resumeSessionID)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	cmd := exec.CommandContext(ctx, s.pythonBin, args...)
 	cmd.Dir = s.codeWorkDir
 	cmd.Env = append(os.Environ(), fmt.Sprintf("PYTHONPATH=%s", s.pythonPath))
 
-	startedAt := time.Now()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		s.logger.Error(
-			"agent process failed",
-			"taskId", task.ID,
-			"sessionId", session.ID,
-			"agentId", session.PrimaryAgentID,
-			"agentName", session.PrimaryAgentName,
-			"runtimeProvider", session.RuntimeProvider,
-			"resumeSessionId", resumeSessionID,
-			"durationMs", time.Since(startedAt).Milliseconds(),
-			"error", err,
-			"stderr", stderr.String(),
-		)
-		return "", "", err
+		cancel()
+		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	var sdkOut sdkOutput
-	if err := json.Unmarshal(output, &sdkOut); err != nil {
-		s.logger.Error(
-			"agent output parse failed",
-			"taskId", task.ID,
-			"sessionId", session.ID,
-			"agentId", session.PrimaryAgentID,
-			"agentName", session.PrimaryAgentName,
-			"output", string(output),
-			"error", err,
-		)
-		return "", "", fmt.Errorf("failed to parse agent output: %w", err)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	assistantContent := strings.TrimSpace(sdkOut.Result)
-	if assistantContent == "" {
-		return "", "", errors.New("agent returned empty output")
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to start agent process: %w", err)
 	}
 
-	s.logger.Info(
-		"agent process completed",
-		"taskId", task.ID,
-		"sessionId", session.ID,
-		"agentId", session.PrimaryAgentID,
-		"agentName", session.PrimaryAgentName,
-		"runtimeProvider", session.RuntimeProvider,
-		"resumeSessionId", resumeSessionID,
-		"capturedSessionId", sdkOut.SessionID,
-		"durationMs", time.Since(startedAt).Milliseconds(),
-	)
-	return assistantContent, sdkOut.SessionID, nil
+	// Cancel context on process exit so pipes clean up.
+	go func() {
+		_ = cmd.Wait()
+		cancel()
+	}()
+
+	return &AgentSession{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: bufio.NewScanner(stdout),
+		logger: s.logger,
+	}, nil
+}
+
+/**
+ * ReadMessage reads the next JSONL message from the agent's stdout.
+ * Returns nil and an error when the stream ends or a read error occurs.
+ */
+func (a *AgentSession) ReadMessage() (*AgentMessage, error) {
+	if !a.stdout.Scan() {
+		if err := a.stdout.Err(); err != nil {
+			return nil, fmt.Errorf("stdout read error: %w", err)
+		}
+		return nil, io.EOF
+	}
+
+	line := a.stdout.Bytes()
+	var msg AgentMessage
+	if err := json.Unmarshal(line, &msg); err != nil {
+		a.logger.Error("failed to parse agent message", "line", string(line), "error", err)
+		return nil, fmt.Errorf("failed to parse agent message: %w", err)
+	}
+
+	return &msg, nil
+}
+
+/**
+ * WriteResponse writes a permission response as JSONL to the agent's stdin.
+ */
+func (a *AgentSession) WriteResponse(response PermissionResponse) error {
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := a.stdin.Write(data); err != nil {
+		return fmt.Errorf("failed to write response: %w", err)
+	}
+
+	return nil
+}
+
+/**
+ * Close terminates the agent process and cleans up resources.
+ */
+func (a *AgentSession) Close() error {
+	if a.stdin != nil {
+		_ = a.stdin.Close()
+	}
+	if a.cmd != nil && a.cmd.Process != nil {
+		return a.cmd.Process.Kill()
+	}
+	return nil
 }
 
 /**

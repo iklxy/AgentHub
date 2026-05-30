@@ -9,6 +9,8 @@ import { StatusBadge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
 import { ChatInput } from "@/components/workspace/chat-input";
 import { MessageBubble } from "@/components/workspace/message-bubble";
+import { RuntimeApprovalCard } from "@/components/workspace/runtime-approval-card";
+import type { PermissionRequest } from "@/lib/api";
 import type { Attachment, AttachmentSourceType, Message, Session, Task } from "@/types/domain";
 
 /**
@@ -42,7 +44,11 @@ export function ChatColumn({
   messages,
   messageOperation,
   pendingAttachments,
+  pendingPermission,
+  isSubmittingPermission,
+  onAllowPermission,
   onClearMessageOperation,
+  onDenyPermission,
   onRemovePendingAttachment,
   onQuoteMessage,
   onReplyMessage,
@@ -64,7 +70,11 @@ export function ChatColumn({
     messages: Message[];
   } | null;
   pendingAttachments: Attachment[];
+  pendingPermission?: PermissionRequest | null;
+  isSubmittingPermission: boolean;
+  onAllowPermission: (requestId: string, updatedInput: Record<string, unknown>) => void;
   onClearMessageOperation?: () => void;
+  onDenyPermission: (requestId: string, message: string) => void;
   onRemovePendingAttachment: (attachmentId: string) => void;
   onQuoteMessage: (message: Message) => void;
   onReplyMessage: (message: Message) => void;
@@ -140,6 +150,15 @@ export function ChatColumn({
         ) : null}
         <div aria-hidden="true" ref={endAnchorRef} />
       </div>
+
+      {pendingPermission ? (
+        <RuntimeApprovalCard
+          isSubmitting={isSubmittingPermission}
+          onAllow={(updatedInput) => onAllowPermission(pendingPermission.requestId, updatedInput)}
+          onDeny={(message) => onDenyPermission(pendingPermission.requestId, message)}
+          permission={pendingPermission}
+        />
+      ) : null}
 
       <div className="shrink-0 border-t border-line bg-white/65 px-7 py-5 backdrop-blur-sm">
         {errorMessage ? <div className="mb-3 rounded-2xl border border-ember/20 bg-ember/10 px-4 py-3 text-sm text-ember">{errorMessage}</div> : null}

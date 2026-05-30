@@ -10,7 +10,7 @@ import asyncio
 import json
 import sys
 
-from agenthub_agent.claude_adapter import AgentRuntimeContext, run_agent_sdk
+from agenthub_agent.claude_adapter import AgentRuntimeContext, run_agent_sdk_with_permissions
 from agenthub_agent.logging import get_logger
 
 
@@ -36,11 +36,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def main_async() -> int:
-    """Run the local agent entrypoint via the Claude Agent SDK.
+def write_result(result: str, session_id: str) -> None:
+    """Write the final agent result as a JSONL message to stdout.
 
     Args:
-        None: Runtime state is loaded from process arguments.
+        result: The assistant response text.
+        session_id: The SDK-generated session ID, or empty string.
+    """
+    msg = {"type": "agent_result", "result": result, "session_id": session_id}
+    line = json.dumps(msg, ensure_ascii=False)
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+async def main_async() -> int:
+    """Run the local agent entrypoint via the Claude Agent SDK with permission approval.
+
+    Permission requests are written as JSONL to stdout and responses are read
+    from stdin. The final result is also written as JSONL to stdout.
 
     Returns:
         Exit code 0 on success, or 1 when the SDK call fails.
@@ -73,7 +86,9 @@ async def main_async() -> int:
     )
 
     try:
-        result, captured_session_id = await run_agent_sdk(context, resume_session_id)
+        result, captured_session_id = await run_agent_sdk_with_permissions(
+            context, resume_session_id
+        )
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "agent sdk request failed",
@@ -88,8 +103,7 @@ async def main_async() -> int:
         )
         return 1
 
-    output = json.dumps({"result": result, "session_id": captured_session_id}, ensure_ascii=False)
-    print(output)
+    write_result(result, captured_session_id)
     logger.info(
         "agent sdk request finished",
         extra={

@@ -34,6 +34,15 @@ func (recorder *statusRecorder) WriteHeader(statusCode int) {
 }
 
 /**
+ * Flush delegates to the underlying ResponseWriter if it supports streaming.
+ */
+func (recorder *statusRecorder) Flush() {
+	if flusher, ok := recorder.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+/**
  * RequestLogging wraps the router with structured request timing logs.
  * Params:
  * - logger: the shared backend logger used for request diagnostics.
@@ -124,4 +133,17 @@ func getAuthenticatedUserID(request *http.Request) (string, error) {
 	}
 
 	return userID, nil
+}
+
+/**
+ * getAuthenticatedUserIDFromQuery extracts the user token from the query string,
+ * falling back to the Authorization header for non-SSE clients.
+ * Params:
+ * - request: the incoming HTTP request that may contain a token query parameter.
+ */
+func getAuthenticatedUserIDFromQuery(request *http.Request) (string, error) {
+	if token := strings.TrimSpace(request.URL.Query().Get("token")); token != "" {
+		return token, nil
+	}
+	return getAuthenticatedUserID(request)
 }

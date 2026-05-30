@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -51,7 +52,7 @@ def get_logger() -> logging.Logger:
         return logger
 
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JsonFormatter())
     logger.addHandler(handler)
     logger.propagate = False
