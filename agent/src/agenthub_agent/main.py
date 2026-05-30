@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
+import sys
 
-from agenthub_agent.claude_adapter import AgentRuntimeContext, run_agent_command
+from agenthub_agent.claude_adapter import AgentRuntimeContext, run_agent_sdk
 from agenthub_agent.logging import get_logger
 
 
@@ -20,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     Returns:
         The parsed namespace containing session runtime metadata and current user input.
     """
-    parser = argparse.ArgumentParser(description="AgentHub v0.2 Claude CLI adapter")
+    parser = argparse.ArgumentParser(description="AgentHub v0.2 Claude Agent SDK adapter")
     parser.add_argument("--agent-name", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--agent-workdir", required=True)
@@ -28,19 +31,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-title", required=True)
     parser.add_argument("--task-description", required=True)
     parser.add_argument("--session-title", required=True)
-    parser.add_argument("--command-mode", choices=["start", "resume"], required=True)
+    parser.add_argument("--resume-session-id", default="")
     parser.add_argument("--user-input", required=True)
     return parser.parse_args()
 
 
-def main() -> int:
-    """Run the local agent entrypoint.
+async def main_async() -> int:
+    """Run the local agent entrypoint via the Claude Agent SDK.
 
     Args:
         None: Runtime state is loaded from process arguments.
 
     Returns:
-        Exit code 0 on success, or 1 when the CLI call fails.
+        Exit code 0 on success, or 1 when the SDK call fails.
     """
     logger = get_logger()
     args = parse_args()
@@ -53,49 +56,60 @@ def main() -> int:
         task_title=args.task_title,
         task_description=args.task_description,
         session_title=args.session_title,
-        command_mode=args.command_mode,
         user_input=args.user_input,
     )
 
+    resume_session_id = args.resume_session_id.strip() or None
+
     logger.info(
-        "agent request received",
+        "agent sdk request received",
         extra={
             "context": {
                 "agent_name": args.agent_name,
                 "session_id": args.session_id,
-                "command_mode": args.command_mode,
+                "resume_session_id": resume_session_id,
             }
         },
     )
 
     try:
-        output = run_agent_command(context)
+        result, captured_session_id = await run_agent_sdk(context, resume_session_id)
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "agent request failed",
+            "agent sdk request failed",
             extra={
                 "context": {
                     "agent_name": args.agent_name,
                     "session_id": args.session_id,
-                    "command_mode": args.command_mode,
+                    "resume_session_id": resume_session_id,
                     "error": str(exc),
                 }
             },
         )
         return 1
 
+    output = json.dumps({"result": result, "session_id": captured_session_id}, ensure_ascii=False)
     print(output)
     logger.info(
-        "agent request finished",
+        "agent sdk request finished",
         extra={
             "context": {
                 "agent_name": args.agent_name,
                 "session_id": args.session_id,
-                "command_mode": args.command_mode,
+                "resume_session_id": resume_session_id,
             }
         },
     )
     return 0
+
+
+def main() -> int:
+    """Entrypoint wrapper that runs the async main on the event loop.
+
+    Returns:
+        Exit code 0 on success, 1 on failure.
+    """
+    return asyncio.run(main_async())
 
 
 if __name__ == "__main__":

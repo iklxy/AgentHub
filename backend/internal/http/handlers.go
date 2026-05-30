@@ -726,7 +726,7 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -746,7 +746,7 @@ func (h *Handlers) CreateMessage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent, nil, attachments)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, taskID, session.ID, input.Content, assistantContent, nil, attachments, newSDKSessionID)
 	if err != nil {
 		h.logFailure(request, "message_create_store_pair", err, "userId", userID, "taskId", taskID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -829,7 +829,7 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -847,7 +847,7 @@ func (h *Handlers) CreateQuotedMessage(writer http.ResponseWriter, request *http
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, nil, attachments)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, nil, attachments, newSDKSessionID)
 	if err != nil {
 		h.logFailure(request, "message_quote_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -940,7 +940,7 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, newSDKSessionID, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,
@@ -959,7 +959,7 @@ func (h *Handlers) CreateMessageFromAction(writer http.ResponseWriter, request *
 		return
 	}
 
-	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, replyToMessageID, attachments)
+	userMessage, assistantMessage, err := h.Store.CreateMessagePair(userID, task.ID, session.ID, trimmedUserContent, assistantContent, replyToMessageID, attachments, newSDKSessionID)
 	if err != nil {
 		h.logFailure(request, "message_reply_store_pair", err, "userId", userID, "taskId", task.ID, "sessionId", session.ID, "sourceMessageId", sourceMessage.ID)
 		WriteError(writer, http.StatusBadRequest, err.Error())
@@ -1002,7 +1002,7 @@ func (h *Handlers) handleRegenerateMessage(
 		return
 	}
 
-	assistantContent, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
+	assistantContent, _, err := h.AgentService.RunSessionAgent(task, session, composedPrompt)
 	if err != nil {
 		h.logFailure(
 			request,

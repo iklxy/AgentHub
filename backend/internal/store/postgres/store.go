@@ -600,7 +600,7 @@ func (s *Store) CreateSession(userID string, input domain.CreateSessionRequest) 
 		"branch",
 		nil,
 		agentTarget.ProviderType,
-		sessionID,
+		"",
 		nil,
 	)
 	if err != nil {
@@ -1182,7 +1182,7 @@ func (s *Store) GetAttachmentByID(userID string, attachmentID string) (domain.At
  * - assistantContent: the assistant reply content.
  * - replyToMessageID: the replied source message identifier when the new user message is a reply action.
  */
-func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment) (domain.Message, domain.Message, error) {
+func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment, newSDKSessionID string) (domain.Message, domain.Message, error) {
 	ctx := context.Background()
 	task, err := s.GetTask(userID, taskID)
 	if err != nil {
@@ -1329,6 +1329,20 @@ func (s *Store) CreateMessagePair(userID string, taskID string, sessionID string
 	)
 	if err != nil {
 		return domain.Message{}, domain.Message{}, err
+	}
+
+	if newSDKSessionID != "" {
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE task_sessions
+			 SET runtime_session_key = $1
+			 WHERE id = $2 AND (runtime_session_key = '' OR runtime_session_key IS NULL)`,
+			newSDKSessionID,
+			session.ID,
+		)
+		if err != nil {
+			return domain.Message{}, domain.Message{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

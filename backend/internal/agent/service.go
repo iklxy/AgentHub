@@ -19,6 +19,11 @@ import (
 	"github.com/lixinyang/agenthub/backend/internal/domain"
 )
 
+type sdkOutput struct {
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
+}
+
 // Service wraps the Python agent entrypoint for session-aware execution.
 type Service struct {
 	logger      *slog.Logger
@@ -65,38 +70,36 @@ func NewService(logger *slog.Logger, codeWorkDir string, harnessRoot string, pyt
 }
 
 /**
- * RunSessionAgent executes the Python agent entrypoint and returns the assistant output.
+ * RunSessionAgent executes the Python agent entrypoint via the Claude Agent SDK and returns the assistant output.
  * Params:
  * - task: the task metadata used to build the execution context.
  * - session: the active task session bound to the current chat round.
  * - userInput: the latest user message content.
+ * Returns:
+ * - assistantContent: the agent response text.
+ * - newSDKSessionID: the SDK-generated session ID on first call, empty on subsequent calls.
+ * - err: execution error if any.
  */
-func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, userInput string) (string, error) {
+func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, userInput string) (string, string, error) {
 	if !supportsClaudeCodeRuntime(session.RuntimeProvider) {
-		return "", fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.RuntimeProvider)
+		return "", "", fmt.Errorf("%w for %s", ErrRuntimeNotImplemented, session.RuntimeProvider)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 
-	commandMode := "resume"
-	if strings.TrimSpace(session.StartedAt) == "" {
-		commandMode = "start"
-	}
-
-	runtimeSessionID := strings.TrimSpace(session.RuntimeSessionKey)
+	resumeSessionID := strings.TrimSpace(session.RuntimeSessionKey)
+	runtimeSessionID := resumeSessionID
 	if runtimeSessionID == "" {
 		runtimeSessionID = session.ID
 	}
 
 	agentWorkDir, ruleFile, err := s.ensureHarness(session, task, runtimeSessionID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	cmd := exec.CommandContext(
-		ctx,
-		s.pythonBin,
+	args := []string{
 		"-m",
 		"agenthub_agent.main",
 		"--agent-name",
@@ -113,11 +116,15 @@ func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, user
 		task.Description,
 		"--session-title",
 		session.Title,
-		"--command-mode",
-		commandMode,
 		"--user-input",
 		userInput,
-	)
+	}
+
+	if resumeSessionID != "" {
+		args = append(args, "--resume-session-id", resumeSessionID)
+	}
+
+	cmd := exec.CommandContext(ctx, s.pythonBin, args...)
 	cmd.Dir = s.codeWorkDir
 	cmd.Env = append(os.Environ(), fmt.Sprintf("PYTHONPATH=%s", s.pythonPath))
 
@@ -133,15 +140,33 @@ func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, user
 			"agentId", session.PrimaryAgentID,
 			"agentName", session.PrimaryAgentName,
 			"runtimeProvider", session.RuntimeProvider,
-			"runtimeMode", commandMode,
+			"resumeSessionId", resumeSessionID,
 			"durationMs", time.Since(startedAt).Milliseconds(),
 			"error", err,
 			"stderr", stderr.String(),
 		)
-		return "", err
+		return "", "", err
 	}
 
-	result := strings.TrimSpace(string(output))
+	var sdkOut sdkOutput
+	if err := json.Unmarshal(output, &sdkOut); err != nil {
+		s.logger.Error(
+			"agent output parse failed",
+			"taskId", task.ID,
+			"sessionId", session.ID,
+			"agentId", session.PrimaryAgentID,
+			"agentName", session.PrimaryAgentName,
+			"output", string(output),
+			"error", err,
+		)
+		return "", "", fmt.Errorf("failed to parse agent output: %w", err)
+	}
+
+	assistantContent := strings.TrimSpace(sdkOut.Result)
+	if assistantContent == "" {
+		return "", "", errors.New("agent returned empty output")
+	}
+
 	s.logger.Info(
 		"agent process completed",
 		"taskId", task.ID,
@@ -149,10 +174,11 @@ func (s *Service) RunSessionAgent(task domain.Task, session domain.Session, user
 		"agentId", session.PrimaryAgentID,
 		"agentName", session.PrimaryAgentName,
 		"runtimeProvider", session.RuntimeProvider,
-		"runtimeMode", commandMode,
+		"resumeSessionId", resumeSessionID,
+		"capturedSessionId", sdkOut.SessionID,
 		"durationMs", time.Since(startedAt).Milliseconds(),
 	)
-	return result, nil
+	return assistantContent, sdkOut.SessionID, nil
 }
 
 /**

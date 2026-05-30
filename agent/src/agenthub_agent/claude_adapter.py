@@ -1,14 +1,14 @@
 # Date: 2026-05-25
 # Author: XinYang Li
 
-"""Claude CLI adapter and runtime helpers for AgentHub v0.2."""
+"""Claude Agent SDK adapter and runtime helpers for AgentHub v0.2."""
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, SystemMessage, query
 
 
 @dataclass(slots=True)
@@ -22,7 +22,6 @@ class AgentRuntimeContext:
     task_title: str
     task_description: str
     session_title: str
-    command_mode: str
     user_input: str
 
 
@@ -65,55 +64,62 @@ def read_rule_file(rule_file: str) -> str:
     return path.read_text(encoding="utf-8").strip() or "No agent-specific rules were found."
 
 
-def ensure_claude_cli_available(executable: str = "claude") -> None:
-    """Validate that the Claude CLI is installed before invocation.
-
-    Args:
-        executable: The CLI executable name or absolute path.
-
-    Raises:
-        FileNotFoundError: Raised when the executable cannot be resolved.
-    """
-    if shutil.which(executable) is None:
-        raise FileNotFoundError(f"Claude CLI executable not found: {executable}")
-
-
-def run_agent_command(context: AgentRuntimeContext, executable: str = "claude", timeout_seconds: int = 90) -> str:
-    """Execute one agent round against the Claude CLI.
+async def run_agent_sdk(
+    context: AgentRuntimeContext,
+    resume_session_id: str | None = None,
+    timeout_seconds: int = 90,
+) -> tuple[str, str]:
+    """Execute one agent round via the Claude Agent SDK.
 
     Args:
         context: The session runtime context for this round.
-        executable: The CLI executable name or absolute path.
+        resume_session_id: SDK session ID to resume, or None for a new session.
         timeout_seconds: The maximum execution time before subprocess timeout.
 
     Returns:
-        The stripped CLI stdout content.
+        A tuple of (result_text, captured_session_id). The session_id is
+        non-empty for the first call and empty for subsequent calls when
+        the session already exists.
 
     Raises:
-        RuntimeError: Raised when the CLI exits with an error or returns empty stdout.
+        RuntimeError: Raised when the SDK returns an error or empty result.
     """
-    ensure_claude_cli_available(executable)
-
-    if context.command_mode == "start":
-        prompt = build_first_message_prompt(context)
-        command = [executable, "--session-id", context.session_id, "-p", prompt]
-    else:
-        command = [executable, "-p", "--resume", context.session_id, context.user_input]
-
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-        check=False,
-        cwd=context.agent_workdir,
+    cwd = context.agent_workdir
+    options = ClaudeAgentOptions(
+        cwd=cwd,
+        resume=resume_session_id,
     )
 
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "Claude CLI execution failed")
+    prompt: str
+    if not resume_session_id:
+        prompt = build_first_message_prompt(context)
+    else:
+        prompt = context.user_input
 
-    output = result.stdout.strip()
-    if not output:
-        raise RuntimeError("Claude CLI returned empty output")
+    captured_session_id = ""
+    text_parts: list[str] = []
+    last_result = ""
 
-    return output
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, SystemMessage):
+            if message.subtype == "init":
+                session_id = message.data.get("session_id", "")
+                if session_id:
+                    captured_session_id = str(session_id)
+        elif isinstance(message, AssistantMessage):
+            for block in message.content:
+                text = getattr(block, "text", "")
+                if text:
+                    text_parts.append(str(text))
+        elif isinstance(message, ResultMessage):
+            if message.result:
+                last_result = message.result
+            if message.is_error:
+                error_text = "\n".join(message.errors) if message.errors else "SDK execution returned an error"
+                raise RuntimeError(error_text)
+
+    result = "".join(text_parts) or last_result
+    if not result:
+        raise RuntimeError("Claude Agent SDK returned empty output")
+
+    return result, captured_session_id

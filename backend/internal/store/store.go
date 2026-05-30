@@ -28,6 +28,6 @@ type Repository interface {
 	GetDraftAttachments(userID string, taskID string, sessionID string, attachmentIDs []string) ([]domain.Attachment, error)
 	CreateAttachment(userID string, taskID string, sessionID string, fileName string, fileType string, sourceType string, storageKey string) (domain.Attachment, error)
 	GetAttachmentByID(userID string, attachmentID string) (domain.Attachment, error)
-	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment) (domain.Message, domain.Message, error)
+	CreateMessagePair(userID string, taskID string, sessionID string, userContent string, assistantContent string, replyToMessageID *string, attachments []domain.Attachment, newSDKSessionID string) (domain.Message, domain.Message, error)
 	CreateAssistantMessage(userID string, taskID string, sessionID string, assistantContent string) (domain.Message, error)
 }
