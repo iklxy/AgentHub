@@ -16,6 +16,8 @@ frontend/node_modules
 backend/bin
 agent/.venv
 agent/__pycache__
+agent/src/agenthub_agent/__pycache__
+/logs/
 agent/.pytest_cache
 agent/.mypy_cache
 /otherfiles/
